@@ -1,0 +1,276 @@
+{
+  "source": "/sharedata/RealEstate10K/vggt_runs",
+  "num_scenes": 30,
+  "confidence_semantics": "VGGT dense-depth confidence = 1 + exp(logit)",
+  "reference_distribution": {
+    "scene_confidence_p25": {
+      "q10": 1.0,
+      "q25": 1.9535968899726868,
+      "q50": 6.7622551918029785,
+      "q75": 10.677199363708496,
+      "q90": 13.085430335998538
+    },
+    "scene_confidence_p50": {
+      "q10": 1.316704535484314,
+      "q25": 5.984957695007324,
+      "q50": 12.765218734741211,
+      "q75": 18.556398391723633,
+      "q90": 24.901237297058106
+    }
+  },
+  "quality_thresholds": {
+    "reference_like": {
+      "confidence_p25_min": 1.9535968899726868,
+      "confidence_p50_min": 5.984957695007324,
+      "meaning": "不低于 RE10K 参考场景的下四分位水平"
+    },
+    "high_confidence": {
+      "confidence_p25_min": 6.7622551918029785,
+      "confidence_p50_min": 12.765218734741211,
+      "meaning": "达到 RE10K 参考场景的中位水平"
+    }
+  },
+  "warning": "该 confidence 是稠密深度置信度而非位姿正确概率；仅用于运动标签质量门控，不替代有真值的位姿误差评测。",
+  "scenes": [
+    {
+      "scene": "0000cc6d8b108390_n6",
+      "confidence_p10": 1.0278146266937256,
+      "confidence_p25": 10.709678649902344,
+      "confidence_p50": 17.497722625732422,
+      "confidence_p75": 21.128477096557617,
+      "camera_center_rmse": 0.026089938557648514
+    },
+    {
+      "scene": "000465ebe46a98d2_n6",
+      "confidence_p10": 1.0179665088653564,
+      "confidence_p25": 1.5992271900177002,
+      "confidence_p50": 4.8294453620910645,
+      "confidence_p75": 6.60683536529541,
+      "camera_center_rmse": 0.006988761294003907
+    },
+    {
+      "scene": "0004866ca872087c_n6",
+      "confidence_p10": 4.735324859619141,
+      "confidence_p25": 10.333678245544434,
+      "confidence_p50": 14.22494125366211,
+      "confidence_p75": 16.428911209106445,
+      "camera_center_rmse": 0.009781368099006975
+    },
+    {
+      "scene": "00066b3649cc07e5_n6",
+      "confidence_p10": 1.0,
+      "confidence_p25": 1.0,
+      "confidence_p50": 1.0000004768371582,
+      "confidence_p75": 1.002609372138977,
+      "camera_center_rmse": 0.014448981352040337
+    },
+    {
+      "scene": "0010533d5f176d7b_n6",
+      "confidence_p10": 1.0000100135803223,
+      "confidence_p25": 1.8557299375534058,
+      "confidence_p50": 3.46751070022583,
+      "confidence_p75": 4.555222988128662,
+      "camera_center_rmse": 0.0028658030753869646
+    },
+    {
+      "scene": "0013a39f3a02b5c3_n6",
+      "confidence_p10": 1.068577766418457,
+      "confidence_p25": 3.1512985229492188,
+      "confidence_p50": 6.599631309509277,
+      "confidence_p75": 8.770832061767578,
+      "camera_center_rmse": 0.03588775884993369
+    },
+    {
+      "scene": "001511b4a282e504_n6",
+      "confidence_p10": 4.31109619140625,
+      "confidence_p25": 14.402924537658691,
+      "confidence_p50": 20.920063018798828,
+      "confidence_p75": 24.95343780517578,
+      "camera_center_rmse": 0.008123454692256627
+    },
+    {
+      "scene": "00259da07b0dba33_n6",
+      "confidence_p10": 2.3799118995666504,
+      "confidence_p25": 7.341287612915039,
+      "confidence_p50": 14.411418914794922,
+      "confidence_p75": 20.160884857177734,
+      "camera_center_rmse": 0.04494223040270433
+    },
+    {
+      "scene": "00336b9590b313a2_n6",
+      "confidence_p10": 4.636624336242676,
+      "confidence_p25": 9.16662311553955,
+      "confidence_p50": 14.898774147033691,
+      "confidence_p75": 21.667306900024414,
+      "camera_center_rmse": 0.013960853790117734
+    },
+    {
+      "scene": "003c67ed6be72aeb_n6",
+      "confidence_p10": 1.442224144935608,
+      "confidence_p25": 10.340570449829102,
+      "confidence_p50": 25.434486389160156,
+      "confidence_p75": 34.754878997802734,
+      "camera_center_rmse": 0.013377509668351533
+    },
+    {
+      "scene": "00407b3f1bad1493_n6",
+      "confidence_p10": 2.8673794269561768,
+      "confidence_p25": 10.11855697631836,
+      "confidence_p50": 13.518959045410156,
+      "confidence_p75": 15.469253540039062,
+      "camera_center_rmse": 0.018466085366505885
+    },
+    {
+      "scene": "00438c154e81cbd1_n6",
+      "confidence_p10": 1.0000046491622925,
+      "confidence_p25": 1.4854055643081665,
+      "confidence_p50": 5.78006649017334,
+      "confidence_p75": 8.151549339294434,
+      "camera_center_rmse": 0.006725524161885613
+    },
+    {
+      "scene": "0049c83bad21bbdf_n6",
+      "confidence_p10": 4.342250347137451,
+      "confidence_p25": 16.02825927734375,
+      "confidence_p50": 25.090097427368164,
+      "confidence_p75": 30.23380470275879,
+      "camera_center_rmse": 0.00643482209832589
+    },
+    {
+      "scene": "00513a2e0e404c0e_n6",
+      "confidence_p10": 2.76648211479187,
+      "confidence_p25": 7.851977825164795,
+      "confidence_p50": 13.69778060913086,
+      "confidence_p75": 16.14824104309082,
+      "camera_center_rmse": 0.014130527725063867
+    },
+    {
+      "scene": "00559a2a16636897_n6",
+      "confidence_p10": 5.572687149047852,
+      "confidence_p25": 12.939042091369629,
+      "confidence_p50": 24.880252838134766,
+      "confidence_p75": 36.76818084716797,
+      "camera_center_rmse": 0.013043168041781185
+    },
+    {
+      "scene": "0059080010e0a279_n6",
+      "confidence_p10": 1.000024437904358,
+      "confidence_p25": 1.9358875751495361,
+      "confidence_p50": 4.463701248168945,
+      "confidence_p75": 7.056888103485107,
+      "camera_center_rmse": 0.008964269215942115
+    },
+    {
+      "scene": "005c440a72e93b03_n6",
+      "confidence_p10": 10.768208503723145,
+      "confidence_p25": 19.726444244384766,
+      "confidence_p50": 28.015230178833008,
+      "confidence_p75": 35.75121307373047,
+      "camera_center_rmse": 0.011643131027457879
+    },
+    {
+      "scene": "005ee91e6c694114_n6",
+      "confidence_p10": 1.0,
+      "confidence_p25": 2.0067248344421387,
+      "confidence_p50": 10.53600025177002,
+      "confidence_p75": 15.505846977233887,
+      "camera_center_rmse": 0.053901129203134605
+    },
+    {
+      "scene": "0071f6d0b342c75f_n6",
+      "confidence_p10": 1.0,
+      "confidence_p25": 1.0,
+      "confidence_p50": 1.0125389099121094,
+      "confidence_p75": 4.318510055541992,
+      "camera_center_rmse": 0.0158396463916656
+    },
+    {
+      "scene": "0076e0a94466efb1_n6",
+      "confidence_p10": 1.0495046377182007,
+      "confidence_p25": 5.047447204589844,
+      "confidence_p50": 9.873838424682617,
+      "confidence_p75": 11.394086837768555,
+      "camera_center_rmse": 0.016391660913354852
+    },
+    {
+      "scene": "008caa6df1da0cd1_n6",
+      "confidence_p10": 1.5642410516738892,
+      "confidence_p25": 4.600400924682617,
+      "confidence_p50": 9.507637023925781,
+      "confidence_p75": 13.61860179901123,
+      "camera_center_rmse": 0.016378127293409848
+    },
+    {
+      "scene": "009700fcc49fe368_n6",
+      "confidence_p10": 1.2557268142700195,
+      "confidence_p25": 3.360022783279419,
+      "confidence_p50": 9.139212608337402,
+      "confidence_p75": 17.52018928527832,
+      "camera_center_rmse": 0.0034199144971706025
+    },
+    {
+      "scene": "009f5248262f70e0_n6",
+      "confidence_p10": 4.621362209320068,
+      "confidence_p25": 11.600768089294434,
+      "confidence_p50": 20.101940155029297,
+      "confidence_p75": 28.49161148071289,
+      "camera_center_rmse": 0.010621114001715492
+    },
+    {
+      "scene": "00a87dd567cdc292_n6",
+      "confidence_p10": 4.8111467361450195,
+      "confidence_p25": 12.449605941772461,
+      "confidence_p50": 18.909290313720703,
+      "confidence_p75": 23.748315811157227,
+      "camera_center_rmse": 0.04808485063788586
+    },
+    {
+      "scene": "00a9f110ad222aa4_n6",
+      "confidence_p10": 1.0,
+      "confidence_p25": 1.0,
+      "confidence_p50": 1.3480734825134277,
+      "confidence_p75": 2.715092182159424,
+      "camera_center_rmse": 0.007790549721500911
+    },
+    {
+      "scene": "00adc59ebcbe00f7_n6",
+      "confidence_p10": 1.0,
+      "confidence_p25": 1.0,
+      "confidence_p50": 1.03438401222229,
+      "confidence_p75": 2.0438759326934814,
+      "camera_center_rmse": 0.009762736147908124
+    },
+    {
+      "scene": "00b40cafaa3a389a_n6",
+      "confidence_p10": 1.2171993255615234,
+      "confidence_p25": 2.953608989715576,
+      "confidence_p50": 8.850438117980957,
+      "confidence_p75": 12.916830062866211,
+      "camera_center_rmse": 0.010470422446344064
+    },
+    {
+      "scene": "00b5cecbfd7f9a51_n6",
+      "confidence_p10": 5.068853855133057,
+      "confidence_p25": 12.615602493286133,
+      "confidence_p50": 23.228832244873047,
+      "confidence_p75": 31.243427276611328,
+      "camera_center_rmse": 0.006459028087090096
+    },
+    {
+      "scene": "00b647226f5d6904_n6",
+      "confidence_p10": 1.0,
+      "confidence_p25": 6.183222770690918,
+      "confidence_p50": 12.567710876464844,
+      "confidence_p75": 15.789493560791016,
+      "camera_center_rmse": 0.008519972933586828
+    },
+    {
+      "scene": "00c5167e29241893_n6",
+      "confidence_p10": 4.833436965942383,
+      "confidence_p25": 10.579761505126953,
+      "confidence_p50": 12.962726593017578,
+      "confidence_p75": 14.870939254760742,
+      "camera_center_rmse": 0.033213534002016584
+    }
+  ]
+}

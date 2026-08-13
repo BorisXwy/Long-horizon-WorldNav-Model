@@ -1,0 +1,43 @@
+# V1 action-centered data preparation config.
+
+version: v1
+derived_root: /sharedata/NAV/derived/v1
+
+video_pack_manifest:
+  source_manifest: /sharedata/NAV/derived/manifests/full_episodes_v1.jsonl
+  output: /sharedata/NAV/derived/v1/manifests/stage1_video_packs.jsonl
+  datasets:
+    - re10k
+    - dl3dv
+    - spatialvid
+    - argoverse2
+  future_stride: 4
+  action_horizon: 4
+  max_samples_per_episode: 8
+
+vae_pack:
+  # V1 latent is not the old 81-frame dense chunk latent.
+  # Each sample encodes [obs, future_1, future_2, future_3, future_4]
+  # into z_obs T=1 and z_future T=1.
+  height: 448
+  width: 896
+  vae_path: /sharedata/Wan2.1-T2V-1.3B/Wan2.1_VAE.pth
+  debug_pt_output: /sharedata/NAV/derived/v1/vae_packs_debug
+  shard_output: /sharedata/NAV/derived/v1/vae_packs_hdf5
+  calibrated_full_gpu_output: /sharedata/NAV/derived/v1/vae_packs_hdf5_fullgpu14_7x7
+  shard_format: hdf5
+  samples_per_hdf5_shard: 1024
+  dtype: float16
+  full_gpu_workers:
+    gpu0: 7
+    gpu1: 7
+    total: 14
+
+sampling:
+  # Natural manifest distribution is dominated by SpatialVID.
+  # Training should use weighted sampling rather than raw row order.
+  stage_one_weights:
+    dl3dv: 0.35
+    spatialvid: 0.40
+    re10k: 0.15
+    argoverse2: 0.10

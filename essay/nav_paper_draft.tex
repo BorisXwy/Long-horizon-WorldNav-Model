@@ -1,0 +1,344 @@
+\documentclass[11pt,a4paper]{ctexart}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+
+\title{NAV: Quasi-Infinite Spatial Memory as Embodied Observation History}
+\author{Anonymous Authors}
+\date{}
+
+\newcommand{\method}{NAV}
+\newcommand{\reg}{Spatial Register Memory}
+\newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
+\newcommand{\unverified}{\textcolor{red}{[Unverified]}}
+\newcommand{\verified}{\textcolor{blue}{[Verified]}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Embodied navigation requires agents to maintain long-horizon observation history while acting under partial observability. Existing VLN systems usually treat history as task-specific visual tokens, recurrent states, or compressed frame caches, which scale poorly with trajectory length and do not explicitly encode predictive or geometric structure. We propose \method, a spatial-aware streaming world-model framework that turns quasi-infinite memory into embodied observation history. \method{} maintains a fixed-budget spatial Register state that is recursively updated from real observations and executed actions. The memory is trained through short-future visual consequence prediction, shaped by 3D supervision, and finally read by a navigation policy. This design decouples dense world-model training from efficient policy-only inference: future visual and 3D signals supervise the representation during training, while the agent only reads the streaming memory at test time. Current implementation verifies the Stage-One T4/IW-aligned Register training path; Stage Two geometric supervision and Stage Three VLN policy learning are reserved for subsequent experiments.
+\end{abstract}
+
+\section{Introduction}
+
+Embodied navigation requires an agent to understand, remember, and act in a continuously observed environment. Unlike static visual recognition, the evidence needed for navigation is often distributed over a long trajectory: an agent may need to use room layout, door directions, object cues, or visited-region information observed many steps earlier. Thus, a navigation policy needs more than current visual recognition; it needs an online, long-horizon, policy-readable observation history.
+
+Most VLN systems formulate this requirement as multi-frame history modeling. They encode historical images, panoramas, trajectory tokens, or visual-language states with attention, caches, sampling rules, or recurrent memories. These mechanisms work well for short-horizon decisions, but they face two limitations. First, explicit history grows with trajectory length. Second, the compressed history is often a task-specific visual representation, rather than a world representation whose spatial structure and action consequences can be verified. In other words, existing memory modules often answer how to keep more observations, but not whether the kept representation is a usable model of the environment.
+
+Video world models provide a different perspective. By predicting future observations, a world model must encode scene layout, viewpoint change, motion regularities, and action consequences. Recent long-horizon and interactive video models show that streaming generation can be supported by fixed-budget memory, rolling cache, or hierarchical memory. 3D-aware world models further show that hidden representations can be shaped by depth, pose, point maps, or occupancy supervision. Meanwhile, world-action models and representation-only control suggest that future modeling may be most useful as training-time representation shaping, rather than as mandatory dense video generation during inference.
+
+These advances leave a gap for embodied navigation. Streaming video memory usually serves generation continuity rather than policy readout. Spatial world models are designed for generation, reconstruction, or driving simulation, not online VLN memory. WAMs often focus on short-horizon manipulation or control, without a persistent spatial memory for long-horizon navigation. This motivates our central question:
+
+\begin{quote}
+Can the quasi-infinite memory and world representation inside a spatial-aware streaming world model serve as embodied observation history for navigation?
+\end{quote}
+
+We propose \method{} to answer this question. \method{} maintains a fixed-budget \reg{} that recursively absorbs real observations and executed actions. Its interface is quasi-infinite: the episode may continue indefinitely, but the explicit memory read by the policy remains fixed in size. Unlike a video-generation cache, the Register is designed as embodied observation history. It is trained by visual consequence prediction, shaped by 3D supervision, and used by a navigation policy.
+
+Our expected contributions are:
+\begin{itemize}
+    \item We formulate embodied observation history as a streaming world representation, turning world-model memory into a policy-readable navigation state.
+    \item We introduce a spatial Register memory that recursively compresses long observation streams into a fixed-budget latent-like world state.
+    \item We define an action-centered training interface that separates historical actions, current consequence actions, and policy query actions, preventing future leakage.
+    \item We design a staged objective: predictive memory pretraining, spatial-readable 3D supervision, and memory-conditioned VLN policy learning. Stage Two/Three results remain \unverified{} until the corresponding experiments are completed.
+\end{itemize}
+
+\section{Related Work}
+
+\paragraph{History modeling in VLN.}
+VLN agents have long relied on historical observations. Recent systems extend this idea with slow-fast context, budget-aware temporal sampling, controllable observation protocols, prefix caching, tree attention masks, or explicit geometry frontends. These methods demonstrate that history matters for navigation. However, their memory is usually a task-specific compression of visual evidence. It provides additional context to the policy, but it is not necessarily a predictive and spatial-readable world representation. \method{} instead treats memory as a world-model state trained by future prediction and geometry supervision.
+
+\paragraph{Streaming video world models.}
+Long-horizon video generation and interactive world models study how to maintain temporal consistency over hundreds or thousands of frames. InfiniteWorld uses pose-free hierarchical memory; Self-Forcing, Causal-Forcing, Rolling Forcing, and LongLive address autoregressive diffusion and train-test mismatch; RELIC and WorldMem explore compressed or external memory. These methods show that streaming world models can maintain useful history, but their memory primarily serves video generation. \method{} borrows the streaming-memory view but changes the target use: the memory must be read by an embodied navigation policy.
+
+\paragraph{Spatial-readable world representations.}
+3D-aware generative models and reconstruction systems, including GeometryForcing, FantasyWorld, AETHER, Voyager, DeepVerse, VGGT-\(\Omega\), and geometry-guided driving world models, show that visual backbones can encode depth, camera, point, correspondence, or occupancy information. These works motivate our Stage-Two objective: the streaming memory should not only predict future visual latents, but also expose spatial structure through depth/pose/point supervision. The difference is that \method{} uses such spatial readability to form an online navigation memory rather than only a reconstruction or generation output \unverified{}.
+
+\paragraph{World-action models and representation-only control.}
+World-action models such as DreamZero, V-JEPA 2, DreamGen, WorldPlanner, and mimic-video connect predictive world modeling to control. Recent Fast-WAM, GigaWorld-Policy, and ImageWAM further suggest that video modeling can shape representations during training while inference directly predicts actions. \method{} follows this representation-only spirit: future visual and 3D consequences are training signals, not policy inputs. However, \method{} extends this idea to long-horizon spatial navigation by introducing a persistent, recursively updated, spatial Register memory.
+
+\paragraph{Positioning of NAV.}
+Existing work solves different pieces of the problem: VLN history methods manage long observations; streaming video models maintain generation memory; spatial world models make representations geometrically readable; WAMs connect future modeling with action prediction. \method{} unifies these pieces in a single Register memory: a quasi-infinite, spatial-aware streaming world representation used as embodied observation history \unverified{}.
+
+\section{Method}
+
+\subsection{Embodied Observation History as Streaming World Representation}
+
+We formulate VLN as a partially observed decision problem. Given instruction \(q\), current observation \(o_t\), historical observations \(o_{<t}\), and executed actions \(a_{<t}\), the agent predicts:
+\[
+a_t \sim \pi(a_t \mid q, o_{\leq t}, a_{<t}).
+\]
+The challenge is that \(o_{\leq t}\) grows with the episode. \method{} replaces explicit history with a fixed-budget memory \(M_t\):
+\[
+a_t \sim \pi_\theta(a_t \mid q, o_t, M_t),
+\qquad
+M_t = \operatorname{Update}_\theta(M_{t-1}, C_t, A^{hist}_t).
+\]
+Here \(C_t\) is a short latent chunk encoded from real observations, and \(A^{hist}_t\) denotes already executed motion/action. We call \(M_t\) embodied observation history: it is neither a frame cache nor an episode-specific learned state, but an online world representation learned from predictive and spatial supervision.
+
+This formulation imposes two causal constraints. First, generated futures never update the real history memory. Second, the current target action is not given as a policy condition. Future visual or 3D signals are used only as consequence supervision during training.
+
+\subsection{Quasi-Infinite Spatial Register Memory}
+
+\method{} uses a fixed-budget \reg{} to represent long history. In the current \texttt{latent\_prefix} variant, the memory has a latent-like spatial layout:
+\[
+M_t \in \mathbb{R}^{B \times 16 \times 4 \times H \times W}.
+\]
+It matches the Wan VAE latent resolution but is not a normal video latent. A new episode begins with:
+\[
+M_0 = E_\theta(C_0, A^{hist}_0),
+\]
+and each subsequent chunk updates the same memory state:
+\[
+M_i = U_\theta(M_{i-1}, C_i, A^{hist}_i).
+\]
+The update preserves spatial layout. For each spatial location \((h,w)\), Register slots attend to the temporal tokens of the incoming chunk at the same location:
+\[
+M_i[:, :, :, h, w] =
+U_\theta^{h,w}\big(M_{i-1}[:, :, :, h, w], C_i[:, :, :, h, w]\big).
+\]
+Thus, historical evidence is written into a spatial world state instead of a structureless token sequence. The term quasi-infinite refers to the fixed-size online interface: history may grow without increasing the memory read by the policy. It does not imply lossless retention \unverified{}.
+
+\subsection{Spatial-Aware World-Model Backbone}
+
+\method{} uses a Wan2.1-style DiT as the shared backbone. HPMC-style history compression is removed or bypassed; latest local memory preserves recent visual details, while the Spatial Register stores long-term world state. Video samples are organized as T4 micro chunks: each chunk contains 13 RGB frames, stride 12, and is independently encoded as \([16,4,H,W]\). Long-horizon context is expanded by increasing Register updates, not by increasing the noisy future target. IW-1/4/8/16 history spans correspond to 7/27/54/107 T4 micro updates.
+
+Given historical chunks \(C_{0:t}\), the model first computes \(M_t\), then predicts future visual consequence:
+\[
+\hat{v}_\theta =
+f_\theta(Z^\sigma_{future}, \sigma, M_t, Z_{local}, A_{cur}, q).
+\]
+Here \(Z^\sigma_{future}\) is the noised future latent, \(Z_{local}\) is the latest local latent, \(A_{cur}\) is the current action condition for consequence prediction, and \(q\) is text or empty text. In the main variant, \(M_t\) is injected as a spatial latent prefix into the visual/main stream, so Register, local observation, and noisy future latent interact inside the same DiT backbone.
+
+\subsection{Action-Centered Navigation Interface}
+
+We distinguish three action variables:
+\[
+A^{hist}, \quad A^{cur}, \quad A^{query}.
+\]
+\(A^{hist}\) is the already executed history action/motion used for Register update. \(A^{cur}\) is the action condition for visual consequence prediction. \(A^{query}\) is the policy-side query to be decoded into navigation actions. This separation avoids two failures: feeding target actions to the policy would leak labels, while removing \(A^{cur}\) from the generation branch would prevent action-dependent dynamics learning.
+
+During Stage One, the action query/output branch is present but its loss weight is zero; video pseudo-actions are not treated as navigation labels. Real navigation action supervision is introduced only in Stage Three. The causal direction is:
+\[
+\text{history/current observation} + \text{instruction}
+\rightarrow
+\text{action}
+\rightarrow
+\text{future consequence}.
+\]
+Thus, future visual and 3D signals shape the representation during training, while inference remains policy-only.
+
+\subsection{Training Objectives and Staged Optimization}
+
+All losses are described here because they jointly define how \(M_t\) becomes a navigation-usable world representation.
+
+\paragraph{Stage One: predictive memory pretraining.}
+Given future latent \(Z_{future}\), noise level \(\sigma\), and noised latent \(Z^\sigma_{future}\), the DiT predicts velocity/noise target \(v^\ast\):
+\[
+\mathcal{L}_{visual}
+=
+\mathbb{E}_{Z_{future},\sigma,\epsilon}
+\left[
+\left\|
+f_\theta(Z^\sigma_{future}, \sigma, M_t, Z_{local}, A_{cur}, q)
+- v^\ast
+\right\|_2^2
+\right].
+\]
+The loss is applied only to the future target latent. Stage One uses
+\[
+\mathcal{L}_{stage1}=\mathcal{L}_{visual},
+\]
+with action format loss weight set to zero. This path is implemented with official Wan2.1-1.3B initialization, HPMC removal, \texttt{latent\_prefix} Register, and IW-1/4/8/16 history-window mixing \verified{}.
+
+\paragraph{Stage Two: spatial-readable world representation.}
+Stage Two adds 3D supervision to the same generation forward. Candidate features \(F_t^l\) are read from multiple DiT layers and Register-after-DiT states. Lightweight probes predict depth, relative pose, and point/correspondence:
+\[
+\mathcal{L}_{3D}
+=
+\lambda_d \mathcal{L}_{depth}
++ \lambda_p \mathcal{L}_{pose}
++ \lambda_m \mathcal{L}_{point}
++ \lambda_c \mathcal{L}_{conf}.
+\]
+The total objective is
+\[
+\mathcal{L}_{stage2}
+=
+\mathcal{L}_{visual}
++ \lambda_{3D}\mathcal{L}_{3D}.
+\]
+Geometry labels are supervision only, not policy inputs. This stage is reserved \unverified{}.
+
+\paragraph{Stage Three: memory-conditioned embodied navigation.}
+The selected feature \(F_t^{nav}=F_t^{l^\ast}\) is used by the navigation head:
+\[
+\pi_\theta(a_{t:t+H-1} \mid F_t^{nav}, o_t, q),
+\]
+with default horizon \(H=4\). The navigation loss is:
+\[
+\mathcal{L}_{nav}
+=
+\operatorname{CE}
+\left(
+\operatorname{NavHead}_\theta(F_t^{nav}, o_t, q),
+a^\ast_{t:t+H-1}
+\right).
+\]
+To reduce forgetting of predictive and spatial representations, Stage Three uses replay:
+\[
+\mathcal{L}_{stage3}
+=
+\lambda_{nav}\mathcal{L}_{nav}
++ \lambda_{stop}\mathcal{L}_{stop}
++ \lambda_v\mathcal{L}_{visual}^{replay}
++ \lambda_{3D}\mathcal{L}_{3D}^{replay}.
+\]
+At inference, generation and 3D heads are disabled. This stage is reserved \unverified{}.
+
+\subsection{Online Navigation Inference}
+
+At test time, \method{} maintains one Register state per episode. The first observation chunk initializes \(M_0\). After each executed action and new observation, the Updater writes real observation and executed action into \(M_t\). The policy outputs:
+\[
+a_t = \pi_\theta(M_t, o_t, q).
+\]
+The inference interface is:
+\[
+\text{real observation history}
+\rightarrow
+\text{quasi-infinite spatial world memory}
+\rightarrow
+\text{embodied action}.
+\]
+
+\section{Experiments}
+
+The experiment section is currently a reserved plan. Unless explicitly marked, results are not yet available.
+
+\subsection{Datasets and Protocols}
+
+Stage One uses video data from DL3DV, SpatialVID, RE10K, and Argoverse2 to construct T4 micro latent windows. Stage Two will use pose, intrinsics, or high-confidence pseudo geometry to supervise depth, pose, and point/correspondence. Stage Three will use VLN datasets such as R2R-CE, RxR-CE, ScaleVLN, and LHPR-VLN. Specific dataset sizes, splits, sampling ratios, and hyperparameters will be reported after the training and evaluation pipelines are finalized.
+
+\subsection{Main Navigation Results}
+
+The main evaluation will report SR, SPL, NE, OSR, and Stop accuracy on seen and unseen validation splits.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lcccccc}
+\toprule
+Method & Memory & 3D Sup. & Inference & Seen SR & Unseen SR & Unseen SPL \\
+\midrule
+VLN baseline & task memory & no & policy-only & TBD & TBD & TBD \\
+Local-only NAV & local & optional & policy-only & TBD & TBD & TBD \\
+NAV w/o 3D & Register & no & policy-only & TBD & TBD & TBD \\
+NAV & Spatial Register & yes & policy-only & TBD & TBD & TBD \\
+\bottomrule
+\end{tabular}
+\caption{Reserved main navigation results.}
+\end{table}
+
+\subsection{Long-Horizon Memory Evaluation}
+
+We will evaluate whether Register uses long history by comparing normal Register, zero Register, shuffled history, latest-local-only, and HPMC under IW-1/4/8/16 history spans.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lccccc}
+\toprule
+History & Local only & Zero Reg. & Shuffled & HPMC & NAV Reg. \\
+\midrule
+IW-1 & TBD & TBD & TBD & TBD & TBD \\
+IW-4 & TBD & TBD & TBD & TBD & TBD \\
+IW-8 & TBD & TBD & TBD & TBD & TBD \\
+IW-16 & TBD & TBD & TBD & TBD & TBD \\
+\bottomrule
+\end{tabular}
+\caption{Reserved long-horizon memory evaluation.}
+\end{table}
+
+\subsection{Spatial Readability and Layer Selection}
+
+We will probe multiple DiT layers and Register-after-DiT features for depth, relative pose, and point/correspondence, then compare probe performance with navigation validation performance.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lccccc}
+\toprule
+Layer & Depth AbsRel & Pose Error & Point Error & SR & SPL \\
+\midrule
+25\% layer & TBD & TBD & TBD & TBD & TBD \\
+50\% layer & TBD & TBD & TBD & TBD & TBD \\
+75\% layer & TBD & TBD & TBD & TBD & TBD \\
+Final layer & TBD & TBD & TBD & TBD & TBD \\
+Register-after-DiT & TBD & TBD & TBD & TBD & TBD \\
+\bottomrule
+\end{tabular}
+\caption{Reserved spatial readability and layer-selection study.}
+\end{table}
+
+\subsection{Ablations}
+
+We reserve ablations for 3D supervision, action-centered interface, Stage-Three replay, generated-future feedback, and Register budget. These ablations test whether geometry is necessary, whether action separation prevents leakage, whether replay preserves world representations, whether generated futures should be excluded from history, and whether a fixed Register budget is sufficient.
+
+\subsection{Efficiency}
+
+Efficiency will be measured by explicit memory size, latency, GPU memory, and whether generation is executed at inference. The expected comparison is between full-history tokens, rolling KV cache, HPMC, and \method{}.
+
+\section{Current Status and Limitations}
+
+The current verified implementation covers Stage-One training: official Wan2.1-1.3B initialization, HPMC removal, \texttt{latent\_prefix} Spatial Register, T4 target latent, IW-1/4/8/16 history mixing, and action-interface format path with zero action loss. The current training log records progress up to step 680 without a completion event at the time of this draft. Stage Two geometry supervision, Stage Three VLN policy learning, navigation evaluation, and most ablations remain unverified.
+
+\section{Conclusion}
+
+\method{} frames embodied observation history as a streaming world representation. By recursively updating a fixed-budget spatial Register from real observations and executed actions, and by training it with predictive, geometric, and navigation objectives, \method{} aims to turn world-model memory into a navigation-usable state. The current draft establishes the method and experimental plan; the central empirical claim will require the reserved Stage Two/Three evaluations.
+
+\begin{thebibliography}{99}
+
+\bibitem{infiniteworld}
+R. Wu et al.
+\newblock Infinite-World: Scaling Interactive World Models to 1000-Frame Horizons via Pose-Free Hierarchical Memory.
+\newblock arXiv preprint, 2026.
+
+\bibitem{vggtomega}
+J. Wang et al.
+\newblock VGGT-\(\Omega\): Scaling Feed-Forward 3D Vision.
+\newblock CVPR, 2026.
+
+\bibitem{gigaworld}
+GigaWorld Team.
+\newblock GigaWorld-Policy.
+\newblock arXiv preprint, 2026.
+
+\bibitem{selfforcing}
+X. Huang et al.
+\newblock Self-Forcing: Bridging the Train-Test Gap in Autoregressive Video Diffusion.
+\newblock arXiv preprint, 2025.
+
+\bibitem{causalforcing}
+H. Zhu et al.
+\newblock Causal Forcing: Autoregressive Diffusion Distillation for Real-Time Interactive Video Generation.
+\newblock arXiv preprint, 2026.
+
+\bibitem{vln}
+P. Anderson et al.
+\newblock Vision-and-Language Navigation: Interpreting Visually-Grounded Navigation Instructions in Real Environments.
+\newblock CVPR, 2018.
+
+\bibitem{vlnce}
+K. Krantz et al.
+\newblock Beyond the Nav-Graph: Vision-and-Language Navigation in Continuous Environments.
+\newblock ECCV, 2020.
+
+\end{thebibliography}
+
+\end{document}

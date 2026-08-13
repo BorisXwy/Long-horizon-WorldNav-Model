@@ -1,0 +1,73 @@
+# Runtime outputs / large artifacts
+log/
+result/
+checkpoints/
+weights/
+outputs/
+runs/
+wandb/
+tensorboard/
+
+# Model weights and tensor caches
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+*.onnx
+*.engine
+*.npz
+*.npy
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+*.arrow
+*.parquet
+*.lmdb
+
+# Videos / generated media
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+*.gif
+
+# Dataset/cache directories
+data/
+datasets/
+cache/
+cached/
+latents/
+vae_packs/
+frame_packs/
+derived/
+
+# Local secrets / machine-specific environment
+.env
+*.env
+config/*.env
+config/rclone*.conf
+*.pem
+*.key
+*.crt
+*.token
+
+# Python / build products
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+build/
+dist/
+*.egg-info/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+

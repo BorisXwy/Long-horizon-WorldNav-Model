@@ -1,0 +1,51 @@
+project:
+  name: nav_register_re10k
+  output_root: /mnt/pool1/sharehome/xiewenyuan/academic/3d_wm_vln/NAV/log
+
+data:
+  root: /sharedata/RealEstate10K
+  source_manifest: /sharedata/RealEstate10K/manifests/frames_train.jsonl
+  nav_manifest: /sharedata/RealEstate10K/nav_register/manifests/train_all.jsonl
+  latent_cache: /sharedata/RealEstate10K/nav_register/latents
+  split: train
+  frames_per_chunk: 81
+  chunks_per_sample: 2
+  height: 448
+  width: 896
+
+model:
+  checkpoint: /sharedata/Infinite-World/checkpoints/infinite_world_model.ckpt
+  wan_root: /sharedata/Wan2.1-T2V-1.3B
+  variant: latent_prefix
+  backbone:
+    model_type: t2v
+    dim: 1536
+    in_channels: 20
+    ffn_dim: 8960
+    freq_dim: 256
+    num_heads: 12
+    num_layers: 30
+  register:
+    channels: 16
+    register_frames: 4
+    hidden_dim: 64
+    num_update_layers: 2
+    num_heads: 4
+    chunk_time_tokens: 8
+
+train:
+  seed: 42
+  batch_size: 1
+  gradient_accumulation_steps: 4
+  learning_rate: 1.0e-5
+  optimizer: adamw
+  weight_decay: 0.01
+  precision: bfloat16
+  max_steps: 1000
+  log_every: 1
+  save_every: 100
+  detach_register_between_chunks: false
+  freeze_backbone: false
+  train_scope: full
+  register_checkpoint: null
+  tensorboard: true
