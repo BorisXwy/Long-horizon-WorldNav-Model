@@ -5,7 +5,7 @@
 | 文档 ID | `NAV-OPS-001` |
 | 类型 | 资源总账（Resource Inventory） |
 | 状态 | Live / Source of Truth |
-| 更新时间 | 2026-08-11（V1 Stage One formal / Wan2.1 official init） |
+| 更新时间 | 2026-08-14（V1 full-pipeline smoke / old executable cleanup） |
 | 职责 | 维护数据、权重、环境、仓库、日志和结果的唯一标准路径 |
 
 本文档记录 NAV 新实验可直接使用的数据集、预训练权重和本地参考仓库。
@@ -22,7 +22,7 @@ Infinite-World 的目录结构、完整推理调用链、HPMC 代码实现及其
 
 V1 不复用 V0 的 81-frame dense latent 作为主缓存。当前正式 Stage One 主缓存为
 `T_latent=4` micro chunk latent；早期 `[obs, future_1, future_2, future_3,
-future_4]` sparse pack 只保留为 scaffold / speed ablation 记录。
+future_4]` sparse pack 只保留为历史速度记录。
 
 | 资源 | 路径 | 说明 |
 | --- | --- | --- |
@@ -38,9 +38,8 @@ future_4]` sparse pack 只保留为 scaffold / speed ablation 记录。
 | V1 HDF5 shard 目标 | `/sharedata/NAV/derived/v1/vae_packs_hdf5_fullgpu14_7x7/` | LeRobot-like index + shard 格式；14路 full-GPU 编码 |
 | V1 Stage3 VLN raw policy | `/sharedata/NAV/derived/v1/vln/raw_policy/` | CPU-only 构建 episode/action/policy chunk manifest |
 | V1 Stage3 VLN rendered obs | `/sharedata/NAV/derived/v1/vln/rendered_obs/` | Habitat-Sim RGB 渲染输出；当前 R2R-CE standard train/val_seen/val_unseen 正在 GPU0 后台准备 |
-| V1 Stage1 scaffold train | `NAV/log/v1-stage1-scaffold-formal-bs192-10000-20260810-123903/` | V1.0 sparse pack 正式 scaffold 训练；非 Wan DiT |
-| V1 Stage1 Wan full train | `NAV/log/v1-stageone-final-wan21official-actioniface-window-longhist-mb1-ebs16-1000-20260811-023650/` | 当前正式 Stage One：官方 Wan2.1 init、action interface、IW-1/4/8/16 window mix、1000 optimizer steps |
-| V1 Stage1 T4 smoke train | `NAV/log/v1-wan-stage1-t4-smoke-20260810-152404/` | IW-1 history=7个T4 micro updates，target T=4，1-step smoke 通过 |
+| V1 full-pipeline smoke | `NAV/log/full_pipeline_smoke/v1_full_pipeline_smoke_20260814_014744/report.json` | 当前完整模型链路验证：Stage1/2/3 train + videogen/policy inference |
+| V1 Stage1 historical runs | `NAV/log/v1-stageone-final-wan21official-actioniface-window-longhist-mb1-ebs16-1000-20260811-023650/` | 旧 action-interface run；仅保留为历史，不再代表当前代码 |
 | V1 schema 文档 | `NAV/doc/03_data/v1_action_geometry_schema.md` | ActionChunk、VaePack、GeometryTarget、V1Sample |
 
 ### V1 T4 micro latent spatial20 准备
@@ -102,10 +101,10 @@ parallelism:
   PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 ```
 
-正式训练脚本：
+当前完整模型链路验证入口：
 
 ```bash
-bash NAV/scripts/run_v1_wan_stage1_t4_history.sh cuda:1 <run_name> 1,4,8,16
+bash NAV/scripts/run_v1_full_pipeline_smoke.sh cpu
 ```
 
 当前正式 run：
@@ -242,62 +241,29 @@ episodes/rendered_episodes.jsonl.gz
 manifests/render_summary.json
 ```
 
-### V1 Stage1 scaffold 训练
+### V1 完整模型链路验证（当前主线，2026-08-14）
 
-2026-08-10 启动第一轮 V1 Stage1 scaffold 训练，用于验证 sparse latent pack、
-policy-safe mask、weighted sampler、future/action 双 loss 与显存开销。该训练
-**不是**完整 Wan2.1/InfiniteWorld DiT，只是 16.4M 参数的小型 Transformer
-scaffold，正式 backbone integration 仍需后续实现。
+当前主线以 `V1FullWorldNavModel` 为唯一有效代码入口，覆盖统一
+`RegisterCell`、`A_hist/A_cur/A_noise`、dual-stream backbone、generation head、
+action flow decoder 和 geometry probe。
 
 ```text
-run:
-  formal:
-  NAV/log/v1-stage1-scaffold-formal-bs192-10000-20260810-123903/
+script:
+  NAV/scripts/run_v1_full_pipeline_smoke.sh
 
-  warmup:
-  NAV/log/v1-stage1-scaffold-bs128-1000-20260810-122314/
+report:
+  NAV/log/full_pipeline_smoke/v1_full_pipeline_smoke_20260814_014744/report.json
 
-data:
-  /sharedata/NAV/derived/v1/vae_packs_hdf5_fullgpu14_7x7/workers
-  194,088 samples
-
-model:
-  hidden_dim=512, layers=4, heads=8, register_tokens=64
-  tokens ≈ 64 register + 1568 obs + 1568 future + 4 action = 3204
-  trainable_parameters=16,439,378
-
-train:
-  formal batch_size=192, steps=10000, AdamW lr=1e-4, weight_decay=0.01
-  λ_visual=1.0, λ_action=0.2, bf16
-  weighted sampler: DL3DV 35%, SpatialVID 40%, RE10K 15%, Argoverse2 10%
-  physical batch = effective batch = 192，不使用 gradient accumulation
-
-optimizer:
-  bitsandbytes 未安装，暂不能使用 8-bit optimizer。
-  当前模型和参数为 bf16，AdamW state 随参数 dtype，优化器显存不是主瓶颈；
-  主显存来自约 3204 tokens/sample 的 activation。
-
-observed memory:
-  bs=1:   max_allocated≈0.44GB, reserved≈0.51GB
-  bs=4:   max_allocated≈1.16GB, reserved≈1.26GB
-  bs=16:  max_allocated≈3.97GB, reserved≈4.13GB
-  bs=64:  max_allocated≈15.03GB, reserved≈15.42GB
-  bs=128: max_allocated≈29.77GB, reserved≈30.82GB
-  bs=192: max_allocated≈44.55GB, reserved≈45.92GB
-
-early signal:
-  step 1  loss=1.8117, visual=1.3201, action=2.4577
-  step 50 loss=0.8756, visual=0.6453, action=1.1515
-  formal bs192 step 1 loss=1.8091, visual=1.3199, action=2.4457
+verified:
+  Stage One   video generation train step
+  Stage Two   video generation + 3D train step
+  Stage Three action flow/CE + video/3D rehearsal train step
+  Videogen inference
+  Policy inference
+  structural audit: no Extractor/Updater, no action/latent additive bias
 ```
 
-检查命令：
-
-```bash
-bash NAV/scripts/check_v1_stage1_scaffold_train.sh
-```
-
-### V1 Stage One 正式训练（当前主线，2026-08-11）
+### V1 Stage One 历史 Wan 训练（已从当前代码入口删除）
 
 当前正式 Stage One 从官方 Wan2.1-T2V-1.3B 初始化，不再从 InfiniteWorld checkpoint
 初始化。训练使用 T4 micro latent、Register latent prefix、Stage One action
@@ -318,7 +284,7 @@ post-train sanity eval:
   watcher tmux:
     nav_v1_stageone_final_eval_waiter
   script:
-    NAV/scripts/infer_v1_t4_generation_sanity.py
+    旧 generation sanity 脚本（2026-08-14 已删除，历史见 git）
   output:
     NAV/result/stageone_t4_generation_sanity/
       v1-stageone-final-wan21official-actioniface-window-longhist-mb1-ebs16-1000-20260811-023650/
@@ -354,11 +320,9 @@ train:
   lambda_action_format=0
 ```
 
-启动入口：
-
-```bash
-bash NAV/scripts/run_v1_wan_stage1_t4_history.sh cuda:1 <run_name> 1,4,8,16
-```
+该批旧入口包含旧 `A_query` / action-bias / InfiniteWorld adapter 逻辑，2026-08-14
+已从当前代码删除。若需要解释历史曲线，只读 log/doc；若必须复现，需要从 git
+历史恢复清理前版本，不得把旧入口混入 V1 主线。
 
 ### V1 Stage1 Wan2.1 / InfiniteWorld sparse-pack 训练（历史记录）
 
@@ -411,17 +375,11 @@ early signal:
   step 1 loss=0.2121, grad_norm=2.2969, sec/optimizer_step≈40.8
 ```
 
-该 run 已被 2026-08-11 的官方 Wan2.1 init + T4 micro Stage One 正式 run
-替代，只作为 sparse-pack scaffold / 历史速度记录保留。由于 effective batch 16
+该 run 已被 2026-08-11 的官方 Wan2.1 init + T4 micro Stage One 历史 run
+替代，只作为 sparse-pack / 历史速度记录保留。由于 effective batch 16
 需要 8 次 micro forward/backward，单卡 10000 step
 预计为 4–5 天量级；若需要加速，下一步应实现/验证双卡 DDP（需额外检查
 DDP bucket 显存）。
-
-检查命令：
-
-```bash
-bash NAV/scripts/check_v1_wan_stage1_train.sh
-```
 
 VGGT-Ω 的完整网络、Register Token、交替注意力、预测头及其对 NAV Stage One
 的适配边界记录在 `NAV/doc/02_architecture/vggt_omega_register_architecture.md`。
@@ -790,8 +748,7 @@ NAV/result/vbench/threeway_stats10/
 - Manifest 汇总：`/sharedata/NAV/derived/manifests/episodes.summary.json`
 - Wan VAE latent：`/sharedata/NAV/derived/latents/<dataset>/`
 - 增量预处理入口：`NAV/scripts/run_incremental_data_prep.sh`
-- Curriculum 配置：`NAV/config/train_curriculum_multidata.yaml`
-- A/B 训练入口：`NAV/scripts/run_curriculum_train.sh`
+- 旧 Curriculum 配置与 A/B 训练入口：已从当前代码删除，仅作为历史记录保留
 - 详细说明：`NAV/doc/04_training/v0_multidataset_curriculum.md`
 
 上述目录均为 NAV 派生产物。原始下载目录保持只读；新增数据下载完成后重新运行增量

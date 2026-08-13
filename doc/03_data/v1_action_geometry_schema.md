@@ -308,46 +308,44 @@ model.forward_v1(..., future_visual_as_policy_condition=...)
 
 ## 模型内部模块
 
-推荐代码结构：
+当前推荐代码结构：
 
 ```text
-RegisterExtractor:
-  obs -> R_0
-
-RegisterUpdater:
-  R_t + obs + optional previous executed action -> R_{t+1}
+RegisterCell:
+  R_{-1}=R_null fixed template
+  R_i = RegisterCell(R_{i-1}, concat([visual_tokens(C_i), A_hist_i]))
 
 VisualStem:
   R_t, Z_obs, Z_future_noisy -> visual/main tokens
 
 ActionStem:
-  action query / noised action target -> action tokens
+  A_hist / A_cur / A_noise -> independent action tokens
 
 TextConditioner:
   instruction/text -> condition tokens
 
-SharedDiT:
-  visual/main tokens + action tokens + condition
+DualStream Shared Backbone:
+  visual stream + action stream + condition
   with explicit attention mask
 
 GenerationHead:
   future tokens -> predicted noise/velocity(Z_future)
 
-ActionHead:
-  action tokens -> primitive logits / delta regression / bucket logits
+ActionFlowDecoder:
+  action stream tokens -> action velocity / primitive logits
 
 GeometryProbe:
   selected hidden/Register -> depth/pose/point/correspondence prediction
 ```
 
-第一版实现策略：
+当前实现策略：
 
 ```text
-v1.0:
-  single hidden-width tokens + explicit attention mask
-
-v1.x:
+v1:
+  unified RegisterCell
   dual-stream / MoT-style visual stream + action expert stream
+  explicit policy-safe attention relation
+  no action/latent additive bias
 ```
 
 ## Loss 接口
@@ -356,10 +354,9 @@ v1.x:
 
 ```text
 L_stage1 =
-  λ_visual L_flow(Z_future)
-+ λ_primitive CE(primitive_id)
-+ λ_delta Huber(delta_ego)
-+ λ_bucket CE(magnitude_bucket)
+  L_visual_flow(Z_future)
+
+Stage One 保留 A_noise / A_out 格式，但不计算 action supervision。
 ```
 
 ### Stage Two
@@ -374,11 +371,10 @@ L_stage2 =
 
 ```text
 L_stage3 =
-  λ_nav CE(nav primitive)
-+ λ_stop L_stop_balance
-+ λ_delta_optional Huber(simulator_delta)
-+ λ_progress_optional L_progress
-+ λ_aux_optional (L_3d or L_generation with no policy leakage)
+  L_action_flow
++ λ_ce CE(action primitive)
++ λ_replay_video L_visual_flow_replay
++ λ_replay_3d L_3D_replay
 ```
 
 ## 落盘组织
@@ -416,11 +412,11 @@ L_stage3 =
 
 ```text
 NAV/src/nav/v1/schema.py
-NAV/src/nav/v1/data/sharded_hdf5.py
 NAV/src/nav/v1/models/{masks,stems,heads}.py
+NAV/src/nav/v1/models/full_model.py
 NAV/scripts/datasets/build_v1_video_pack_manifest.py
 NAV/scripts/datasets/encode_v1_vae_packs.py
-NAV/scripts/smoke_v1_model_blocks.py
+NAV/scripts/smoke_v1_full_pipeline.py
 NAV/config/v1_data_prep.yaml
 ```
 
@@ -475,21 +471,27 @@ z_future = [16,1,56,112]
 action_primitive = [0,3,3,3]
 ```
 
-模型块 smoke：
+完整模型 full-pipeline smoke：
 
 ```text
-python NAV/scripts/smoke_v1_model_blocks.py --hidden-dim 64 --register-dim 32
+bash NAV/scripts/run_v1_full_pipeline_smoke.sh cpu
 ```
 
 结果：
 
 ```text
-obs tokens      = 1568
-future tokens   = 1568
-action tokens   = 4
-attention mask  = policy-safe
-future_out      = [B,16,1,56,112]
-action_logits   = [B,4,12]
+report:
+  NAV/log/full_pipeline_smoke/v1_full_pipeline_smoke_20260814_014744/report.json
+
+stage checks:
+  Stage One   = video generation loss + backward/update
+  Stage Two   = Stage One + 3D probe loss + backward/update
+  Stage Three = action flow/CE + video/3D rehearsal + backward/update
+
+inference:
+  videogen_z_future       = [2,16,2,8,8]
+  policy_action_chunk     = [2,10,6]
+  policy_primitive_logits = [2,10,12]
 ```
 
 ## 代码组织建议

@@ -26,7 +26,8 @@ Wan2.1-T2V-1.3B official init
 | 5 | V1 还有哪些结构参数待定，当前默认选择是什么 | `01_design/v1_open_design_questions.md` |
 | 6 | Stage One/Two/Three 各用哪些数据、变量和 loss | `04_training/v1_three_stage_training_data_plan.md` |
 | 7 | 当前 Stage One `T_latent=4` 如何对齐 InfiniteWorld history | `04_training/v1_stage_one_t4_iw_aligned.md` |
-| 8 | 数据、权重、日志、结果绝对路径 | `06_operations/resource_inventory.md` |
+| 8 | 新版完整模型三阶段训练/推理链路是否跑通 | `05_evaluation/v1_full_pipeline_smoke.md` |
+| 9 | 数据、权重、日志、结果绝对路径 | `06_operations/resource_inventory.md` |
 
 ## 文档分层
 
@@ -44,6 +45,7 @@ Wan2.1-T2V-1.3B official init
 | Sparse Pose 怎样变成逐帧 Action | `03_data/action_annotation_specification.md` |
 | 当前数据下载、latent、训练运行状态 | `03_data/dataset_preparation_status.md` |
 | VLN/R2R/RxR/ScaleVLN/LHPR 准备状态 | `03_data/vln_dataset_preparation_status.md` |
+| 当前完整模型 smoke 和结构审计 | `05_evaluation/v1_full_pipeline_smoke.md` |
 
 ### V0 历史与 baseline
 
@@ -110,6 +112,7 @@ Wan2.1-T2V-1.3B official init
 | NAV-EVL-002 | StreamVLN 100/500 + DualVLN 100 Done | 评测复现协议 | `05_evaluation/r2r_ce_sota_reproduction.md` |
 | NAV-EVL-003 | Smoke Reproduced | 外部基线复现 | `05_evaluation/v1_bridgevla_plus_memorybench_reproduction.md` |
 | NAV-EVL-004 | Smoke Reproduced | 外部 WAM 基线复现 | `05_evaluation/v1_fastwam_gigaworld_reproduction.md` |
+| NAV-EVL-005 | Smoke Verified | 完整模型链路验证 | `05_evaluation/v1_full_pipeline_smoke.md` |
 | NAV-OPS-001 | Live | 资源总账 | `06_operations/resource_inventory.md` |
 | NAV-RES-001 | Reference | 外部调研 | `07_research/world_model_training_efficiency.md` |
 | NAV-RES-002 | Verified Snapshot / External Results | Benchmark调研 | `07_research/r2r_rxr_benchmark_sota.md` |

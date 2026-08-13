@@ -4,7 +4,7 @@
 | --- | --- |
 | 文档 ID | `NAV-TRN-001` |
 | 类型 | 训练规范（Training Specification） |
-| 状态 | Active；SpatialVID Short 阶段优先执行 |
+| 状态 | Historical Baseline / 旧入口已从当前代码删除 |
 | 更新时间 | 2026-07-29 |
 | 职责 | 定义增量 latent、shuffle 和 Short/Medium/Long 课程训练 |
 
@@ -12,6 +12,9 @@
 `v0_streaming_training_sample_semantics.md` 为唯一事实来源；数据 tensor 和
 Action 的定义分别以 `../03_data/training_data_construction.md` 与
 `../03_data/action_annotation_specification.md` 为准。
+
+本文件保留 V0 多数据集课程训练历史。文中的旧配置和训练脚本已从当前 NAV
+代码主线删除，不再作为 V1 训练入口。
 
 ## 数据隔离原则
 

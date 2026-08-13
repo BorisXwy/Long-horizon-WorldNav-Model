@@ -4,9 +4,9 @@
 | --- | --- |
 | 文档 ID | `NAV-TRN-007` |
 | 类型 | 训练规范（Training Specification） |
-| 状态 | T4/IW Data Rule Active；Action Interface Superseded by DEC-034 |
+| 状态 | T4/IW Data Rule Active；Old Wan Training Entry Superseded |
 | 更新时间 | 2026-08-14 |
-| 职责 | 固定 V1 Stage One 中 `T_latent=4` 的数据切片、history 构造、InfiniteWorld 对齐口径和训练入口 |
+| 职责 | 固定 V1 Stage One 中 `T_latent=4` 的数据切片、history 构造和 InfiniteWorld 对齐口径 |
 
 ## 当前结论
 
@@ -18,7 +18,8 @@ future latent segment 做 RFlow / diffusion loss，而不是恢复 InfiniteWorld
 latent manifest 与 window 构造规则仍是当前有效规则；但 2026-08-13 版本的
 `A_query` / single hidden-width action token 实现已被 DEC-034 覆盖。新的正式
 action interface 使用 `A_noise -> action flow decoder -> A_out`、
-`H_action=H_nav=10` 和 dual-stream / MoT-style backbone。
+`H_action=H_nav=10` 和 dual-stream / MoT-style backbone。旧 Wan 训练入口已从
+当前代码删除；当前可执行结构验证见 `NAV-EVL-005`。
 
 与 InfiniteWorld 的对齐只发生在 history/context span 上：
 
@@ -218,10 +219,10 @@ DL3DV / RE10K / Argoverse2:
   当前没有统一 caption，fallback 到 empty UMT5 condition。
 ```
 
-训练脚本已经支持 per-sample text sidecar：
+历史 Wan 训练脚本曾支持 per-sample text sidecar：
 
 ```text
-NAV/scripts/train_v1_wan_stage1_t4_history.py
+旧 Wan T4 训练入口（2026-08-14 已从当前代码删除）
   --text-cache-root /sharedata/NAV/derived/v1/text_embeddings/t4_micro
 ```
 
@@ -311,21 +312,16 @@ save:
   final checkpoint = full-final.pt
 ```
 
-## 训练入口
+## 训练入口状态
 
-主训练脚本：
-
-```text
-NAV/scripts/train_v1_wan_stage1_t4_history.py
-```
-
-便捷入口：
+2026-08-14 之后，本文不再定义当前可执行训练入口；本文只保留 T4/IW 对齐和
+历史 run 配置。当前完整模型链路验证入口为：
 
 ```bash
-bash NAV/scripts/run_v1_wan_stage1_t4_history.sh cuda:0 <run_name> 1,4,8,16
+bash NAV/scripts/run_v1_full_pipeline_smoke.sh cpu
 ```
 
-默认配置：
+旧 Wan T4 入口已从当前代码删除。旧默认配置仅作为历史记录：
 
 ```text
 checkpoint = /sharedata/Wan2.1-T2V-1.3B/diffusion_pytorch_model.safetensors
@@ -495,11 +491,11 @@ history buckets:
 SpatialVID 20% latent。下一轮训练必须记录 dataset-aware sampler 或数据配比；
 不得按自然文件数让 SpatialVID 压倒 DL3DV/RE10K。
 
-当前已准备的自动评估入口：
+历史自动评估入口（已从当前代码删除）：
 
 ```text
 script:
-  NAV/scripts/infer_v1_t4_generation_sanity.py
+  旧 V1 T4 generation sanity 脚本（已删除，历史见 git）
 
 watcher tmux:
   nav_v1_stageone_final_eval_waiter

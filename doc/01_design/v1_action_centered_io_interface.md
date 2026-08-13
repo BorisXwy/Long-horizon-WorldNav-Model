@@ -178,13 +178,13 @@ Register 是跨时间历史的紧凑 video token 状态，不再存储完整历�
 Register/history R_t:  [B, K, D_reg]
 推荐初始 K:            128 或 256
 D_reg:                 进入 DiT 前投影到 Wan2.1 hidden_dim
-初始化策略:             R_{-1}=R_null fixed scaffold；R_0=RegisterCell(R_null, concat([visual_tokens(C_0), A_hist0/no-op action tokens]))
+初始化策略:             R_{-1}=R_null fixed template；R_0=RegisterCell(R_null, concat([visual_tokens(C_0), A_hist0/no-op action tokens]))
 更新策略:               R_t=RegisterCell(R_{t-1}, concat([visual_tokens(C_t), A_hist_t]))
 ```
 
 关键语义：
 
-- `R_null` 是固定初始 register scaffold，不携带 episode-specific 信息，也不作为
+- `R_null` 是固定初始 register template，不携带 episode-specific 信息，也不作为
   learnable scene prior。
 - `R_0` 与后续 `R_t` 都由同一个 `RegisterCell` 在线更新得到；区别只在于
   第一次的 previous register 是 `R_null`。

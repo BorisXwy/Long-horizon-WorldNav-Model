@@ -10,6 +10,19 @@
 
 ## 一句话状态
 
+**2026-08-14 代码状态更新**：V1 正式完整模型链路已经落到
+`NAV/src/nav/v1/models/full_model.py`，并通过 full-pipeline smoke：
+
+```text
+NAV/log/full_pipeline_smoke/v1_full_pipeline_smoke_20260814_014744/report.json
+```
+
+验证内容包括 Stage One video generation loss、Stage Two 3D additional loss、
+Stage Three policy/action loss + video/3D rehearsal loss、参数梯度/更新审计，
+以及 videogen / policy 两种推理路径。旧 scaffold、旧 `A_query`、旧 action-bias
+和旧 InfiniteWorld adapter 可执行入口已从当前代码主线删除；历史结论只保留在
+v0 文档中。
+
 **2026-08-14 设计覆盖说明**：V1 正式结构已按 DEC-034 更新为
 `A_noise -> action flow decoder -> A_out`、`H_action=H_nav=10`、
 dual-stream / MoT-style backbone，以及明确 causal attention 关系。此前
@@ -18,7 +31,7 @@ smoke 或 diagnostic，不再代表最终正式结构。随后 DEC-037 将 Regis
 `RegisterCell`：每个 episode 从 fixed `R_null` 开始，
 `R_i=RegisterCell(R_{i-1}, concat([visual_tokens(C_i), A_hist_i]))`；`A_hist`
 通过独立 action tokens / cross-attention context 交互，禁止 action bias /
-latent bias / additive bias。当前代码仍需按 DEC-034/037 重构后再启动新的正式训练。
+latent bias / additive bias。
 
 V1 Stage One 已进入 text-conditioned fullmix 正式训练流水线：从官方
 `Wan2.1-T2V-1.3B` `diffusion_pytorch_model.safetensors` 初始化 shared DiT

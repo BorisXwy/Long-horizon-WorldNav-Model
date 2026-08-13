@@ -1,4 +1,4 @@
-"""Minimal V1 heads for smoke training."""
+"""V1 generation and action heads."""
 
 from __future__ import annotations
 
@@ -52,4 +52,3 @@ class FutureLatentHead(nn.Module):
         patches = patches.view(b, grid_t, grid_h, grid_w, self.out_channels, pt, ph, pw)
         patches = patches.permute(0, 4, 1, 5, 2, 6, 3, 7).contiguous()
         return patches.view(b, self.out_channels, t, h, w)
-

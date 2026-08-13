@@ -4,11 +4,14 @@
 | --- | --- |
 | 文档 ID | `NAV-TRN-003` |
 | 类型 | 训练语义规范（Training Semantics Specification） |
-| 状态 | Active / Source of Truth |
+| 状态 | Historical Semantics / V0 only |
 | 更新时间 | 2026-07-29 |
 | 职责 | 定义单轮、多轮、teacher forcing、Register递归和训练/推理差异 |
 
 ## 当前采用的训练样本
+
+本节描述 V0 Register 训练语义；当前 V1 主线以 `RegisterCell` 和
+full-pipeline smoke 文档为准。
 
 当前 SpatialVID Short 使用 random-prefix next-chunk teacher forcing。一个
 样本是同一 episode 中连续的2或3个 chunk：

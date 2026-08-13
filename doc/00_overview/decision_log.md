@@ -175,9 +175,9 @@
 
 ### DEC-030 补充（2026-08-11）
 
-- **状态**：`Accepted / Implemented`（`InfiniteRegisterAdapter` 已支持官方
-  Wan2.1 safetensors 初始化；`train_v1_wan_stage1_t4_history.py` 默认
-  checkpoint 已切换为官方 Wan2.1-T2V-1.3B）。
+- **状态**：`Superseded / Historical Implementation Removed`（旧
+  InfiniteRegisterAdapter/Wan T4 训练入口已在 2026-08-14 从当前代码删除；本决策
+  只保留“V1 从官方 Wan2.1-T2V-1.3B 初始化”的原则）。
 - **选择**：V1 Stage One 正式训练从官方 `Wan2.1-T2V-1.3B`
   `diffusion_pytorch_model.safetensors` 初始化 DiT backbone，而不是从
   InfiniteWorld checkpoint 初始化。官方 Wan 的 `patch_embedding.weight`
@@ -187,14 +187,15 @@
   的 shared DiT/Register/action interface；继续从 InfiniteWorld checkpoint
   初始化会混入 HPMC/action/local memory 旧方案先验，不符合“正式 Stage One”
   的 from-scratch 定义。
-- **影响文档**：`00_overview/decision_log.md`；影响代码
-  `src/nav/infinite_adapter.py`、`scripts/train_v1_wan_stage1_t4_history.py`。
+- **影响文档**：`00_overview/decision_log.md`；旧影响代码已删除，当前实现见
+  `src/nav/v1/models/full_model.py` 和 `NAV-EVL-005`。
 - **替代关系**：替代旧 V0/V1.0 实验中的“从原始 InfiniteWorld 初始化”规则。
   InfiniteWorld checkpoint 仍只作为 V0 对照、旧实验复现和 baseline 使用。
 
 ### DEC-031 补充（2026-08-13）
 
-- **状态**：`Accepted / Implemented`（代码 smoke 已通过；正式长训尚未重启）。
+- **状态**：`Superseded by DEC-034/037/038`（旧 `A_query` 实现已删除；主线改为
+  `A_noise` + dual-stream + `RegisterCell`）。
 - **选择**：正式 V1 Stage One 必须把 `A_cur` 作为 DiT condition/context；
   `A_query/A_noise` 才作为 shared action tokens 插入 Wan/DiT 主 token stream。
   `A_out` 从同一 Wan block 后的 shared action hidden 读出。Stage One 只计算
@@ -219,16 +220,15 @@
   - shared policy latency：
     `NAV/result/latency/v1_final_shared_policy_step1000_20260813.json`；
     单次 policy-only full shared Wan/DiT forward 约 `0.366s`，峰值显存约 `5.78GiB`。
-- **影响代码**：`Infinite-World/infworld/models/dit_model.py`、
-  `NAV/src/nav/infinite_adapter.py`、
-  `NAV/scripts/train_v1_wan_stage1_t4_history.py`、
-  `NAV/scripts/benchmark_v1_shared_policy_latency.py`。
+- **影响代码**：旧影响代码已从当前 NAV 主线删除；当前结构验证见
+  `NAV/src/nav/v1/models/full_model.py`、`NAV/scripts/smoke_v1_full_pipeline.py`。
 - **替代关系**：替代 DEC-027/028/030 中“action branch 保留格式但未明确必须进入
   shared backbone”的含混表述。
 
 ### DEC-032 补充（2026-08-13）
 
-- **状态**：`Accepted / Implemented / Smoke Verified`。
+- **状态**：`Superseded / Historical`（16-channel/token-type 原则保留；旧 Wan
+  patch 入口脚本已删除）。
 - **选择**：正式 V1 删除 InfiniteWorld 的 `20-channel mask` 输入包装。DiT 主输入
   不再做 `16 latent channels + 4 condition mask channels` 的 channel concat；
   `patch_embedding` 回到 Wan 原生 `Conv3d(16 -> 1536, kernel=(1,2,2))`。
@@ -247,11 +247,8 @@
   - 1-step 正式训练 smoke：
     `NAV/log/v1-final-16ch-token-type-acur-noisyonly-smoke-20260813/full-step-000001.pt`；
     `loss=1.1650`，`peak_reserved_gib=31.17`。
-- **影响代码**：`Infinite-World/infworld/models/dit_model.py`、
-  `NAV/src/nav/infinite_adapter.py`、
-  `NAV/scripts/train_v1_wan_stage1_t4_history.py`、
-  `NAV/scripts/benchmark_v1_shared_policy_latency.py` 以及 V1 T4 generation /
-  autoreg inference 脚本。
+- **影响代码**：旧影响代码已从当前 NAV 主线删除；当前 full-pipeline smoke
+  用 `V1FullWorldNavModel` 验证 no 20-channel mask / no action-bias 结构约束。
 - **替代关系**：替代 DEC-030 中“20-channel IW-style backbone 入口 + 4 mask
   channels zero-init”的实现口径；旧 V0/IW baseline 脚本仍可作为历史复现实验，
   但不得作为 V1 正式结构。
@@ -263,7 +260,7 @@
   clean prefix / Register / local visual tokens 使用 `t=0`；future noisy visual
   tokens 使用 RFlow `visual_t`；`A_query/A_noise` action tokens 使用独立
   `action_t`。
-- **训练实现**：`train_v1_wan_stage1_t4_history.py` 显式采样 `visual_t` 并传给
+- **训练实现（历史）**：旧 Wan T4 脚本曾显式采样 `visual_t` 并传给
   RFlowScheduler 加噪和 video flow loss；同时用 `action_flow_shift=5.0`
   独立采样 `action_t`，传给 backbone 只调制 `A_query` action tokens。
   当前 visual branch 继续使用 `visual_flow_shift=7.0`、
@@ -283,9 +280,8 @@
     `NAV/log/v1-final-giga-timestep-smoke-20260813/full-step-000001.pt`；
     `loss=1.1692`，`visual_timestep_mean=917.26`，
     `action_timestep_mean=998.0`，`peak_reserved_gib=30.95`。
-- **影响代码**：`Infinite-World/infworld/models/dit_model.py`、
-  `NAV/src/nav/infinite_adapter.py`、
-  `NAV/scripts/train_v1_wan_stage1_t4_history.py`。
+- **影响代码**：旧影响代码已从当前 NAV 主线删除；当前 full-pipeline smoke
+  仍保留 `visual_t` 与独立 `action_t` 两路输入格式。
 - **替代关系**：替代 DEC-032 smoke 版本中 `A_query` action tokens 默认使用
   `t=0` 的实现；DEC-032 的 16-channel/token-type/20-channel mask 删除仍保留。
 
@@ -375,8 +371,8 @@
 
 ### DEC-037 补充（2026-08-14）
 
-- **状态**：`Accepted Design / Not Implemented`（文档已更新；代码下一步需按该
-  口径实现）。
+- **状态**：`Accepted / Implemented in full-pipeline smoke`（
+  `src/nav/v1/models/full_model.py` 已实现统一 `RegisterCell`）。
 - **选择**：Register 侧不再区分 `Extractor` 与 `Updater`。统一为一个
   recurrent `RegisterCell`：
 
@@ -385,7 +381,7 @@
   R_i = RegisterCell(R_{i-1}, concat([visual_tokens(C_i), A_hist_i]))
   ```
 
-  其中 `R_null` 是 fixed、non-episode-specific 的 register scaffold，只提供
+  其中 `R_null` 是 fixed、non-episode-specific 的 register template，只提供
   register slot/type/position 结构，不携带可学习场景先验。`C_0` 的首步写入和后续
   `C_i` 的递归更新都经过同一个 `RegisterCell`。`A_hist` 继续以独立 action tokens /
   cross-attention context / gated token adapter 参与；继续禁止 action bias /
@@ -402,6 +398,43 @@
 - **替代关系**：覆盖 DEC-036 中 `Extractor / Updater` 的双模块表述；保留 DEC-036
   的 `A_hist` token/cross-attention 参与和 no-bias 约束，也保留 DEC-034 的
   `A_noise`、`H_action=10`、action flow decoder、dual-stream backbone。
+
+### DEC-038 补充（2026-08-14）
+
+- **状态**：`Accepted / Implemented / Smoke Verified`。
+- **选择**：当前 NAV 主线可执行代码只保留新版完整模型链路。旧 scaffold、小
+  bypass head、旧 A/B Register、旧 `A_query`、旧 action-bias 和旧
+  InfiniteWorld adapter 入口从当前代码删除；历史结果保留在 v0 文档和 git 历史。
+- **完整模型 smoke**：
+
+  ```text
+  script:
+    NAV/scripts/run_v1_full_pipeline_smoke.sh
+
+  model:
+    NAV/src/nav/v1/models/full_model.py
+
+  latest report:
+    NAV/log/full_pipeline_smoke/v1_full_pipeline_smoke_20260814_014744/report.json
+  ```
+
+- **验证范围**：
+  1. Stage One：`L_visual_flow` forward/backward/update；
+  2. Stage Two：`L_stage1 + λ_3d L_3D` forward/backward/update；
+  3. Stage Three：`L_action_flow + λ_ce CE + λ_video L_visual_replay +
+     λ_3d L_3D_replay` forward/backward/update；
+  4. videogen inference：输出 `z_future` / `future_velocity`；
+  5. policy inference：不输入 future noisy video，输出 `action_chunk` /
+     `primitive_logits` / `primitive_ids`；
+  6. 结构审计：必须使用 `RegisterCell`，不得出现 Extractor/Updater 模块，不得
+     出现 action/latent additive bias path。
+- **理由**：之后所有训练、测试、推理冒烟测试都必须使用完整代码和完整数据流；
+  只跑 scaffold 或旁路小结构会再次把速度、loss 和可行性结论带偏。
+- **影响文档**：`doc/AGENT.MD`、`05_evaluation/v1_full_pipeline_smoke.md`、
+  `00_overview/project_status.md`、`06_operations/resource_inventory.md`。
+- **替代关系**：覆盖 DEC-031/032/033 的旧 `A_query`/Wan patch 实现入口；保留
+  其中被 DEC-034/037 吸收的原则，例如 no 20-channel mask、per-token timestep、
+  policy-safe attention 和官方 Wan 初始化方向。
 
 
 新增决策时写明日期、状态、选择、主要理由、影响文档和替代关系。只有已经确认并

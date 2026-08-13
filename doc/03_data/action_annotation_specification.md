@@ -152,8 +152,8 @@ Pose 来自 `transforms.json`，每条与 `images_8/frame_*.png` 一一对应。
 | 职责 | 脚本 |
 | --- | --- |
 | 通用 Pose/Action manifest | `NAV/scripts/prepare_multidataset_manifest.py` |
-| SpatialVID Short action | `NAV/scripts/prepare_spatialvid_short_actions.py` |
 | RE10K窗口与动作 | `NAV/scripts/prepare_re10k_manifest.py` |
-| SpatialVID数据选择公共逻辑 | `NAV/src/nav/spatialvid_short_data.py` |
+| V1 T4 micro episode manifest | `NAV/scripts/datasets/build_v1_t4_micro_manifest.py` |
+| V1 full-pipeline 模型链路验证 | `NAV/scripts/smoke_v1_full_pipeline.py` |
 
 数据构建总规范见 `training_data_construction.md`。

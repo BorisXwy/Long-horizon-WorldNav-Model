@@ -4,13 +4,17 @@
 | --- | --- |
 | 文档 ID | `NAV-EVL-001` |
 | 类型 | 评测协议与记录（Evaluation Protocol） |
-| 状态 | Verified Baseline |
+| 状态 | Historical Baseline / 旧入口已从当前代码删除 |
 | 更新时间 | 2026-08-06 |
 | 职责 | 固定 VBench 对齐口径并按时间记录每次测评（模型/训练实现 + 测评条件 + 结果） |
 
 ---
 
 ## 0. 评测协议与口径（所有记录共用）
+
+本文件保留 V0 InfiniteWorld/Register A/B 的 VBench 复现记录。文中的旧 NAV
+Register 推理脚本已从当前代码主线删除；当前 V1 结构验证见
+`v1_full_pipeline_smoke.md`。
 
 ### 0.1 VBench 指标
 

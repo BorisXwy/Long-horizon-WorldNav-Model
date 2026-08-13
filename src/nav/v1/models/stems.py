@@ -1,8 +1,4 @@
-"""Minimal V1 stems.
-
-These modules are intentionally generic. The first Wan2.1 integration can swap
-the visual patch embed with the real InfiniteWorld/Wan patch embedding.
-"""
+"""V1 visual/register/action stem modules."""
 
 from __future__ import annotations
 
@@ -70,4 +66,3 @@ class ActionStem(nn.Module):
 
     def from_primitives(self, primitive_ids: torch.Tensor) -> torch.Tensor:
         return self.primitive_embed(primitive_ids.long())
-

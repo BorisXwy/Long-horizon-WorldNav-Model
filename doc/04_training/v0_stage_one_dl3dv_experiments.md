@@ -4,11 +4,14 @@
 | --- | --- |
 | 文档 ID | `NAV-TRN-005` |
 | 类型 | 训练实验规范（Training Experiment Specification） |
-| 状态 | A stopped @541 (ckpt@500) / B done @1000 / 验证边界已界定 |
+| 状态 | Historical Baseline / 旧入口已从当前代码删除 |
 | 更新时间 | 2026-08-07 |
 | 职责 | 固定 Stage One 1.0 的初始化、数据、采样、显存实测和运行入口 |
 
 ## 实验定义
+
+本文件保留 V0/early-V1 历史实验记录。文中的旧运行命令不再是当前 NAV
+可执行入口；如需复现，请从 git 历史恢复清理前版本。
 
 Stage One 1.0 分别训练 A/B（DEC-019，2026-08-03 更新）：
 

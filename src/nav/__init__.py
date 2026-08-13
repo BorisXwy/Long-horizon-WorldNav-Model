@@ -1,6 +1,5 @@
-"""NAV：基于 Infinite-World 的流式 Register 世界模型实验。"""
+"""NAV：Long-horizon WorldNav Model 当前 V1 主线代码。"""
 
-from .register_memory import RegisterMemory
-from .spatial_register_memory import SpatialRegisterMemory
+from .v1.models import V1FullModelConfig, V1FullWorldNavModel
 
-__all__ = ["RegisterMemory", "SpatialRegisterMemory"]
+__all__ = ["V1FullModelConfig", "V1FullWorldNavModel"]

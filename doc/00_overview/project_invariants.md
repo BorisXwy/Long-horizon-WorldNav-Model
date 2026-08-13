@@ -43,7 +43,7 @@
 5. Register 不保存 episode-specific state 到 checkpoint；checkpoint 保存的是
    RegisterCell、DiT、action interface / heads 等参数。
 6. 新 episode 的初始状态固定为 `R_null`，不是 learnable episode memory；
-   `R_null` 只提供固定 register slots / type-position scaffold。第一个 history
+   `R_null` 只提供固定 register slots / type-position template。第一个 history
    chunk 也通过同一个 RegisterCell 写入：
    `R_0 = RegisterCell(R_null, concat([visual_tokens(C_0), A_hist_0]))`；后续递归为
    `R_i = RegisterCell(R_{i-1}, concat([visual_tokens(C_i), A_hist_i]))`。
@@ -96,7 +96,7 @@
 ## 数据与缓存不变量
 
 1. V1 Stage One 当前正式缓存是 T4 micro latent，不是 V0 的 81-frame dense
-   latent，也不是早期 sparse pack scaffold。
+   latent，也不是早期 sparse pack / toy route。
 2. 每个 T4 micro chunk 固定：
    - RGB frames：13；
    - stride：12；
