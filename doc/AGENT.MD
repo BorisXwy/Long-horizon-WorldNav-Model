@@ -112,6 +112,39 @@ agent（含自动化训练、评测、调研、写作）的任何工作必须**�
 三线不一致时以"代码+记录"为准先修 doc，不得反向用 doc/essay 覆盖工程事实。
 新增/修改能力时，agent 须同步检查三线是否收口，并在 doc 标注验证状态。
 
+## 完整链路 smoke 规则
+
+之后所有训练、测试、推理的 smoke test / 冒烟测试必须使用正式代码和完整流程，
+不得再使用 scaffold / toy path / mock module 作为有效验证依据。
+
+允许缩小：
+
+1. 数据量：例如只取 1-2 个 batch、少量 episode、少量 prompt。
+2. 步数：例如 1 step / 10 steps / 小规模 eval subset。
+3. 分辨率、batch size、worker 数：在不改变代码路径语义的前提下降低资源需求。
+
+不允许替代：
+
+1. 不允许用 `scaffold` 模型、临时小 Transformer、旁路小 head 或 mock backbone
+   证明正式模型已跑通。
+2. 不允许绕过正式 dataloader、正式 model forward、正式 loss、正式 inference /
+   eval entrypoint 后，把结果记为正式 smoke。
+3. 不允许把历史 scaffold run 当作当前 V1 正式结构的速度、显存、loss 或质量结论。
+
+记录 smoke 时必须写清：
+
+```text
+正式入口脚本 / config
+真实加载的模型权重或初始化方式
+真实数据 root / manifest
+是否执行完整 forward / backward / loss / decode / metric
+缩小了哪些规模参数
+输出 log / result 路径
+```
+
+若因为工程尚未完成只能跑 scaffold，必须明确标为 `scaffold diagnostic` 或
+`toy diagnostic`，不得标为 `smoke verified`、`implemented` 或正式训练/测试依据。
+
 ## Insight 分析规则
 
 `08_insight/insight_log.md` 记录对 NAV idea 与网络设计的改进分析，受以下
