@@ -222,6 +222,40 @@ GeometryTarget = {
 
 注意：
 
+Stage Two 中，`GeometryTarget` 默认绑定到 current/local chunk，即预测
+`C_t` 时的 `C_{t-1}`。Register history 只包含 `C_0...C_{t-2}`，不包含
+`C_{t-1}`，这样 current chunk 的空间 token/grid hidden 可以作为 dense 3D
+probe 的主要读出窗口。
+
+参考 VGGT-Ω，3D probe 不应只读取一个全局 pooled register。推荐最小结构是：
+
+```text
+current hidden grid -> depth / point map / confidence
+register + pooled current hidden -> relative pose / camera motion
+```
+
+候选监督：
+
+```text
+depth_current:
+  [B, T_cur, H_g, W_g]
+
+point_map_current:
+  [B, T_cur, H_g, W_g, 3]
+
+relative_pose_current:
+  [B, T_cur-1, 4, 4] 或 compact 6/7/9D pose encoding
+
+valid_mask / confidence:
+  [B, T_cur, H_g, W_g]
+```
+
+其中 dense depth/point 来自 simulator/GT depth 或 VGGT/VGGT-Ω pseudo label；
+relative pose 来自 dataset/simulator pose 或 sparse pose interpolation。全部只用于
+训练监督，不作为模型推理输入。
+
+注意：
+
 ```text
 GeometryTarget 只作为 loss target。
 不得作为 Stage Three policy input。

@@ -83,6 +83,37 @@ Action、GeometryTarget、VaePack 和 V1Sample 的统一字段定义见
 `../03_data/v1_action_geometry_schema.md`。本文件只描述三阶段如何使用这些
 schema 训练。
 
+## History / Current / Target 时间边界
+
+V1 正式样本必须采用下面的流式边界，避免 latest current chunk 同时进入
+Register 和 Local：
+
+```text
+给定连续 micro chunks:
+  C_0, C_1, ..., C_{t-2}, C_{t-1}, C_t
+
+用于预测 C_t 时:
+  Register history = C_0 ... C_{t-2}
+  Current / Local  = C_{t-1}
+  Target future    = C_t
+```
+
+也就是：
+
+```text
+R_{t-2} = RegisterCell(... RegisterCell(R_null, C_0, A_hist0) ..., C_{t-2}, A_hist_{t-2})
+z_obs   = latent(C_{t-1})
+z_future_target = latent(C_t)
+```
+
+禁止把 `C_{t-1}` 既写进 Register 又作为 `z_obs/current` 输入。Register 承担
+更早历史压缩，Current/Local 承担最近观测细节。
+
+这个边界也决定 Stage Two 的 3D supervision：主要监督窗口放在
+`C_{t-1}` current chunk 上，而不是放在被 Register 压缩后的老历史上。理由是
+current chunk 保留了最完整的空间 token/grid hidden，最接近 VGGT-Ω 中每帧
+Patch Tokens + Camera/Register Tokens 被 camera/depth heads 读取的结构。
+
 ## 按数据集确定的训练变量表
 
 以下表格是数据构建和 dataloader 的准绳。`EMPTY` 表示该变量以空 embedding /
@@ -116,6 +147,68 @@ Stage Two 在 Stage One forward 基础上增加：
 ```text
 L_stage2 = L_visual_flow + λ_3d L_3D
 ```
+
+### Stage Two current-chunk 3D 监督
+
+参考 VGGT-Ω 的设计，Stage Two 不只监督一个全局 register 向量，而是在 shared
+backbone 的若干候选层读取：
+
+```text
+current visual hidden tokens     # 对应 C_{t-1} 的 patch/latent-grid tokens
+register-after-backbone tokens   # 历史上下文汇聚后的 scene/memory tokens
+```
+
+推荐第一版 probe：
+
+```text
+current hidden grid
+  -> DepthHead / PointHead
+  -> depth / point_map / confidence
+
+register + pooled current hidden
+  -> Camera/PoseHead
+  -> relative pose / camera motion
+```
+
+其中 dense depth/point supervision 只作用在 current chunk 的可见视角上；
+relative pose/camera supervision 可使用 current chunk 内帧间 pose，或
+`C_{t-1} -> C_t` 的短期相机运动。Pose/depth/point 仍然只作为训练监督，不作为
+推理输入。
+
+Stage Two dataloader 因此需要为每个样本额外构造：
+
+```text
+geometry_window = C_{t-1}
+geometry_target:
+  intrinsics_current
+  poses_current
+  relative_poses_current
+  depth_current or point_map_current
+  confidence / valid_mask
+  teacher_source
+```
+
+可用 teacher 来源按优先级：
+
+```text
+1. simulator / GT pose + depth
+2. dataset camera pose + sparse/interpolated depth/point target
+3. VGGT/VGGT-Ω pseudo depth / point map / confidence
+```
+
+Loss 第一版：
+
+```text
+L_3D =
+  λ_depth * masked_scale_shift_depth_loss(D_pred, D_gt)
++ λ_point * masked_point_l1_or_l2(P_pred, P_gt)
++ λ_pose  * relative_pose_loss(T_pred, T_gt)
++ λ_conf  * confidence_calibration_loss(optional)
+```
+
+VGGT-Ω 给我们的直接启发是：保留 dense current tokens 做 3D readout，同时用
+Register/scene tokens 提供跨视角上下文；不要只用一个 compressed Register 去
+恢复全部空间细节。
 
 ### Stage Three：VLN 数据变量
 
