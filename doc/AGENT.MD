@@ -11,27 +11,52 @@
 5. 先写结论、当前状态或执行入口，再写背景和推导。
 6. 数量、耗时、显存、磁盘和指标必须注明统计口径。
 
+## Git 提交与推送规则
+
+自 2026-08-21 起，agent 每次修改 NAV 项目的代码或文档后，必须在本轮工作
+结束前完成对应的 Git commit，并推送到远端仓库。commit message 必须明确记录
+本次代码/文档改动与实验目的，例如涉及 Stage2 probe 时需写清：
+
+```text
+stage2 probe sweep: add frozen-backbone layer probes and docs
+```
+
+执行要求：
+
+1. 只提交本次任务相关文件，避免把历史未整理改动、他人改动或大文件产物混入。
+2. commit 前使用 `git status --short` 检查 staged 范围。
+3. 训练日志、checkpoint、视频、latent、rendered PNG 等大产物不得提交；只提交
+   可复现脚本、配置、文档和小型文本摘要。
+4. 若远端 push 失败，必须在最终回复中说明失败原因、已生成的本地 commit hash
+   和需要用户处理的事项。
+5. 若工作树已存在大量无关 dirty 文件，必须显式采用 pathspec 精确 add 本次文件。
+
 ## 唯一事实来源
 
 - 当前状态总览：`00_overview/project_status.md`
-- 当前 V1 硬规则：`00_overview/project_invariants.md`
-- 当前 V1 模型接口：`01_design/v1_action_centered_io_interface.md`
-- 当前 V1 待定项：`01_design/v1_open_design_questions.md`
-- 下载和预处理状态：`03_data/dataset_preparation_status.md`
-- V1 数据与训练变量表：`04_training/v1_three_stage_training_data_plan.md`
-- V1 Stage One T4/IW 对齐训练：`04_training/v1_stage_one_t4_iw_aligned.md`
+- 项目规则与文档规范：`00_overview/project_rules_and_documentation_standard.md`
+- 最终正式结构、训练与 acceptance 硬标准：
+  `00_overview/final_formal_training_standard.md`
+- 当前 V1 模型结构、接口、历史模型尝试与待定项：
+  `01_model/model_evolution_and_current_architecture.md`
+- 下载、预处理、Action/Geometry Schema 与 VLN 渲染状态：
+  `02_data/data_preparation_schema_and_status.md`
+- V1/V0 训练计划、Stage One/Two/Three、课程与实验记录：
+  `03_training/training_plan_and_experiment_log.md`
+- 评测协议、外部复现与 benchmark 调研：
+  `04_evaluation/evaluation_reproduction_and_benchmarks.md`
+- Insight 问题寄存器：`05_insight/insight_log.md`
 - 资源路径：`06_operations/resource_inventory.md`
 - 关键方案变更：`00_overview/decision_log.md`
 
 ## V0/V1 阅读规则
 
-- `v1_*` 是当前主线：Wan2.1 official init、`T_latent=4`、Register /
-  action-centered interface、Stage One/Two/Three 新三阶段。
-- `v0_*` 是历史与对照：InfiniteWorld checkpoint init、81-frame dense chunk、
+- V1/V0 不再按大量分散文件维护，而是进入主题总文档中的对应章节。
+- `V1` 是当前主线：Wan2.1 official init、`T_latent=4`、Register /
+  action-centered interface、single shared WanBlock、Stage One/Two/Three 新三阶段。
+- `V0` 是历史与对照：InfiniteWorld checkpoint init、81-frame dense chunk、
   A/B Register 旧实验、VBench baseline 和旧 Stage Two/Three 设计。
-- 无 `v0/v1` 前缀文档必须在正文说明它是通用规范、资源状态，还是历史兼容入口。
-- 写新实验记录时，如果实验属于当前正式主线，优先新增或更新 `v1_*` 文档；
-  只有复现旧结果、对照或解释历史 run 时才写入 `v0_*`。
+- 新实验记录优先写入对应主题总文档；只有内容很大且会长期独立维护时才新增文件。
 
 ## V1 数据准备显存规则
 
@@ -46,6 +71,51 @@
    专用检查脚本为准。
 
 `repointro.md` 只是兼容入口，不得重复维护资源内容。
+
+## V1 架构硬规则
+
+0. **2026-08-18 起的最终正式训练标准**：完整标准单独维护在
+   `00_overview/final_formal_training_standard.md`。后续所有声称为“最终结构 / 正式训练 /
+   acceptance”的 run，必须同时满足以下条件；只满足其中一部分的 run 只能标为
+   `gate`、`ablation` 或 `diagnostic`：
+   - 使用新版结构：保留多类 token 交互，包含 video generation branch 与
+     policy branch，并显式维护二者的 attention / causal mask 关系；
+   - 保留 `A_noise -> A_out` policy/action path；Stage1/2 可以不监督 action，
+     但 token 位置、mask、forward path 不得删除；
+   - `A_hist` 用于 Register update；`A_cur` 作为 video generation 的
+     action condition；`A_noise/A_out` 用于 Stage3 policy/action supervision；
+   - Register update 与 action condition 训练时必须混入一定比例的 all-zero
+     empty input，用于覆盖无 action / 无条件场景；
+   - latent 规则为 `T_latent=4`；history 长度混合必须对齐 InfiniteWorld
+     `1 / 4 / 8 / 16` IW-chunk 等价长度；
+   - 数据混合至少包含 `RE10K + SpatialVID + DL3DV`；有 text 的样本直接编码
+     text，没有 text 的样本使用此前约定的空白/empty text embedding；
+   - Stage2/正式 co-training 使用 `3D + visual` 混合 loss；Stage3 在此基础
+     上加入 policy/action loss，并保留 visual/3D replay 以防退化；
+   - effective batch size 默认 `ebs=16`。如果因显存只能降级，必须显式标注
+     为资源降级 run，不得与正式标准混淆。
+   - 昨日 `formal_v1_fixed_rnull_shared_tail_1k_fixedpatch_20260818_013124`
+     只证明 `fixed_rnull_unified + shared_tail_token` 子结构在 RE10K Stage2
+     gate 上可收敛，不等同于上述最终正式训练。
+
+1. 当前正式 V1 主结构遵循 DEC-041：**single shared WanBlock token stream**。
+   主 DiT / policy-visible token stream 是 Register、`Z_obs`、future、text、
+   `A_cur/A_noise`。`A_hist` 只用于 Register update；Register 已吸收历史动作后，
+   policy 侧不得再直接读取独立 `A_hist` 或原始 `Z_history` token。
+2. 不得把 GigaWorld-style dual-stream / MoT-style action expert 当作正式主线
+   实现；它只能作为 related work、历史 diagnostic 或显式 ablation。
+3. 保留最新 action interface：所有样本只暴露一种 action；正式 schema 是
+   `combo_id = trans_id * 12 + rot_id`，policy head 输出
+   `combo_logits=[B,H_action,144]`。Stage One/Two 视频数据把 action 用作
+   `a_condition / A_hist / A_cur`，Stage Three VLN 数据把 action 用作
+   `a_label / A_out` 监督。不得新增独立 `trans_logits` 与 `rot_logits` 作为
+   默认正式监督头。
+4. `move/view` 是 pose-derived camera-motion factorization，不是所有数据集
+   共享的 universal robot action ontology。涉及 lateral / strafe / “蟹行”
+   时必须先查 `result/data_audit/crabwalk_motion_20260817.json` 或重新运行
+   `scripts/analyze_crabwalk_motion.py`；R2R/VLN 默认不含 strafe primitive。
+5. 若代码、日志或旧 smoke 中仍出现 `DualStreamBackbone` / 独立 action expert，
+   必须标为 `Superseded by DEC-041`，不得继续开正式训练。
 
 ## 内容边界
 
@@ -67,7 +137,7 @@
    （`src/`）与实验运行（`log/`）实际验证。
 2. **收敛前置**：任何写入 essay 的方法、结论或实验结果，必须先在
    `doc/` 与核心代码/实验中收敛（设计已定、代码已实现、实验已跑出并
-   记录）后才能进入 essay。未收敛的设想写在 `doc/08_insight/`，不进 essay。
+   记录）后才能进入 essay。未收敛的设想写在 `doc/05_insight/`，不进 essay。
 3. **不一致即停**：若 essay 与 doc/代码/实验结果不一致，以 doc 与实验为准，
    先修正 essay，不得反向用 essay 覆盖项目事实。
 4. **引用回溯**：essay 中引用的数字与图表应标注其 `doc/` 或 `result/`
@@ -88,7 +158,7 @@ essay（`intro`、`relatedworks`、`experiment`）与 doc 中所有"概念性结
 优于 HPMC""拿掉 3D 监督后退化"等）必须就地标注验证状态：
 
 - **已验证**：`【已验证→<记录指针>】`，指针指向 `result/` 产物路径、
-  `doc/05_evaluation/` 记录号或 `log/` checkpoint，且该产物真实存在。
+  `doc/04_evaluation/` 记录号或 `log/` checkpoint，且该产物真实存在。
 - **未验证**：`【未验证】`，并尽量补一句未验证的原因（如"Stage Two 未实现"
   "仅短程 proxy""长程 autoreg 未跑"）。背景性陈述（领域现状、他人工作描述）
   不算概念性结果，无需标注。
@@ -121,7 +191,8 @@ agent（含自动化训练、评测、调研、写作）的任何工作必须**�
 
 1. 数据量：例如只取 1-2 个 batch、少量 episode、少量 prompt。
 2. 步数：例如 1 step / 10 steps / 小规模 eval subset。
-3. 分辨率、batch size、worker 数：在不改变代码路径语义的前提下降低资源需求。
+3. batch size、gradient accumulation、worker 数：在不改变模型结构、输入输出
+   语义和数据变量的前提下降低资源需求。
 
 不允许替代：
 
@@ -130,6 +201,11 @@ agent（含自动化训练、评测、调研、写作）的任何工作必须**�
 2. 不允许绕过正式 dataloader、正式 model forward、正式 loss、正式 inference /
    eval entrypoint 后，把结果记为正式 smoke。
 3. 不允许把历史 scaffold run 当作当前 V1 正式结构的速度、显存、loss 或质量结论。
+4. 不允许为了冒烟或快速验证而缩小模型结构或关键张量几何，包括但不限于：
+   backbone depth、hidden width、attention/token layout、Register token 数、action
+   horizon、`T_latent`、latent/video 空间分辨率、VAE 编解码分辨率、loss 分支变量。
+   如因调试临时缩小，必须标为 `diagnostic invalid for acceptance`，不得作为
+   “完整训练”“正式 smoke”“验收结果”或方案有效性证据。
 
 记录 smoke 时必须写清：
 
@@ -147,7 +223,7 @@ agent（含自动化训练、评测、调研、写作）的任何工作必须**�
 
 ## Insight 分析规则
 
-`08_insight/insight_log.md` 记录对 NAV idea 与网络设计的改进分析，受以下
+`05_insight/insight_log.md` 记录对 NAV idea 与网络设计的改进分析，受以下
 规则约束：
 
 1. 每次新分析前必须先把此前所有问题压缩进该文件的"问题寄存器"表并标注
@@ -156,5 +232,5 @@ agent（含自动化训练、评测、调研、写作）的任何工作必须**�
    采纳或显式废弃）后，才允许开启下一轮新分析。
 3. Insight 主体必须详细：动机、对应已调研工作、具体改法（不动 Wan2.1
    backbone）、预期收益、可验证实验指针、风险。
-4. Insight 不等于决策；被采纳并写入 `01_design/` 或 `04_training/` 且在
+4. Insight 不等于决策；被采纳并写入 `01_model/` 或 `03_training/` 且在
    `decision_log.md` 记录后才成为正式方案。
