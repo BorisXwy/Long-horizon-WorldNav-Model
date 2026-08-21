@@ -8002,9 +8002,9 @@ probe_layer16:
      `episodes ≈ 4901`，`history_iw=1` 可构造 `windows ≈ 14045`。
    - policy forward 中不输入 `A_cur`；policy branch 读取
      `Register + Z_obs + text/empty + A_noise`。
-   - 当前 VLN T4 cache 有 raw instruction，但还没有 UMT5 text cache；
-     因此本次先使用 empty UMT5 token，是结构/链路与 action-policy cotrain
-     验证，不代表最终 instruction-conditioned VLN 效果。
+   - 更正：Stage3 正式 VLN cotrain 必须接入 instruction embedding，不能使用
+     empty UMT5 作为正式训练条件。之前 empty-text run 只作为链路 smoke，
+     不作为正式 Stage3 结果。
    - loss：
 
 ```text
@@ -8035,3 +8035,34 @@ stage3_final_vln smoke:
 
 注意：Stage3 每个 grad accumulation micro-batch 包含一次 policy forward/backward
 和一次 Stage2 replay forward/backward，因此单步时间约为 Stage2 的 1.7 倍。
+
+2026-08-21 23:30 修正：
+
+- 新增 `scripts/cache_v1_stage3_vln_text_embeddings.py`。
+- 从 VLN T4 latent sidecar 定位 raw-policy action json，读取 `instruction`，
+  使用 Wan2.1 UMT5 encoder 缓存 per-sample instruction embedding。
+- 默认输出：
+
+```text
+/sharedata/NAV/derived/v1/vln/text_embeddings/t4_micro/{dataset}/{sample_id}.pt
+```
+
+- 缓存脚本同时写出已完成 text cache 的 manifest snapshot：
+
+```text
+/sharedata/NAV/derived/v1/vln/text_embeddings/t4_micro/_cached_manifest_latest.jsonl
+```
+
+- `scripts/train_v1_stage3_final_vln_cotrain.py` 已改为从
+  `--vln-text-cache-root` 读取每个 VLN sample 的 instruction embedding。
+- 正式 Stage3 重启时必须使用 `--require-vln-text-cache`，避免静默 fallback
+  到 empty text。
+- 当前处理流程：
+
+```text
+1. 停止旧 Stage3 empty-text run。
+2. GPU0 后台缓存 VLN instruction UMT5 embeddings。
+3. 缓存完成后，用 _cached_manifest_latest.jsonl + --require-vln-text-cache
+   重启 Stage3 final VLN cotrain。
+4. GPU1 的 Stage2 layer16-probe cotrain 保持运行。
+```

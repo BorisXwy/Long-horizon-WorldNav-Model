@@ -68,6 +68,8 @@ class TrainConfig:
     log_every: int
     seed: int
     output_root: str
+    vln_text_cache_root: str
+    require_vln_text_cache: bool
 
 
 def open_text(path: Path):
@@ -123,6 +125,8 @@ class VLNT4PolicyDataset:
         action_horizon: int,
         batch_size: int,
         text_empty: Path,
+        text_cache_root: Path,
+        require_text_cache: bool,
         max_episodes: int,
         seed: int,
     ) -> None:
@@ -134,6 +138,11 @@ class VLNT4PolicyDataset:
         empty = torch.load(text_empty, map_location="cpu", weights_only=False)
         self.empty_y = empty["y"].to(torch.bfloat16)
         self.empty_mask = empty["y_mask"]
+        self.text_cache_root = text_cache_root
+        self.require_text_cache = bool(require_text_cache)
+        self.text_cache: dict[str, tuple[torch.Tensor, torch.Tensor, str]] = {}
+        self.text_hits = 0
+        self.text_fallbacks = 0
         rows = []
         with open_text(manifest) as stream:
             for line in stream:
@@ -216,6 +225,33 @@ class VLNT4PolicyDataset:
             return [int(x) for x in data.get("gt_actions", [])]
         return []
 
+    def _text(self, payload: dict[str, Any]) -> tuple[torch.Tensor, torch.Tensor, str]:
+        dataset = str(payload.get("dataset", "unknown"))
+        sample_id = str(payload.get("sample_id", ""))
+        key = f"{dataset}/{sample_id}"
+        if key in self.text_cache:
+            y, y_mask, source = self.text_cache[key]
+            self.text_hits += 1
+            return y, y_mask, source
+        path = self.text_cache_root / dataset / f"{sample_id}.pt"
+        if path.is_file():
+            text_payload = torch.load(path, map_location="cpu", weights_only=False)
+            y = text_payload["y"].to(torch.bfloat16)
+            y_mask = text_payload["y_mask"]
+            source = str(path)
+            self.text_hits += 1
+        else:
+            if self.require_text_cache:
+                raise FileNotFoundError(f"missing VLN instruction embedding: {path}")
+            y = self.empty_y
+            y_mask = self.empty_mask
+            source = "empty_fallback_missing_vln_instruction_embedding"
+            self.text_fallbacks += 1
+        self.text_cache[key] = (y, y_mask, source)
+        if len(self.text_cache) > 128:
+            self.text_cache.pop(next(iter(self.text_cache)))
+        return y, y_mask, source
+
     def _action_window(self, actions: list[int], start: int) -> tuple[torch.Tensor, torch.Tensor]:
         combos = []
         mask = []
@@ -236,6 +272,9 @@ class VLNT4PolicyDataset:
         a_hist = []
         action_combo = []
         action_masks = []
+        ys = []
+        y_masks = []
+        text_sources = []
         sample_ids = []
         for item in items:
             payload = self._payload(item["latent_path"])
@@ -255,10 +294,14 @@ class VLNT4PolicyDataset:
             combo, mask = self._action_window(actions, (start + history_micro) * 12)
             action_combo.append(combo)
             action_masks.append(mask)
+            y, y_mask, text_source = self._text(payload)
+            ys.append(y)
+            y_masks.append(y_mask)
+            text_sources.append(text_source)
             sample_ids.append(str(payload.get("sample_id", item["sample_id"])))
         z_obs_t = torch.stack(z_obs, dim=0)
-        y = self.empty_y.expand(self.batch_size, *self.empty_y.shape[1:])
-        y_mask = self.empty_mask.expand(self.batch_size, *self.empty_mask.shape[1:])
+        y = torch.cat(ys, dim=0)
+        y_mask = torch.cat(y_masks, dim=0)
         batch = {
             "history_latents": torch.stack(histories, dim=0).to(device=device, dtype=dtype, non_blocking=True),
             "z_obs": z_obs_t.to(device=device, dtype=dtype, non_blocking=True),
@@ -279,6 +322,9 @@ class VLNT4PolicyDataset:
             "history_micro": self.history_micro_by_iw[iw],
             "sample_ids": sample_ids,
             "action_valid": float(batch["action_loss_mask"].sum().detach().cpu().item()),
+            "text_sources": text_sources,
+            "text_hits": self.text_hits,
+            "text_fallbacks": self.text_fallbacks,
         }
         return batch, meta
 
@@ -332,6 +378,8 @@ def main() -> None:
     parser.add_argument("--log-every", type=int, default=1)
     parser.add_argument("--seed", type=int, default=20260821)
     parser.add_argument("--max-vln-episodes", type=int, default=0)
+    parser.add_argument("--vln-text-cache-root", type=Path, default=Path("/sharedata/NAV/derived/v1/vln/text_embeddings/t4_micro"))
+    parser.add_argument("--require-vln-text-cache", action="store_true")
     parser.add_argument("--output-root", type=Path, default=ROOT / "log" / "v1_stage3_final_vln_cotrain")
     args = parser.parse_args()
 
@@ -357,6 +405,8 @@ def main() -> None:
         action_horizon=model.cfg.action_horizon,
         batch_size=args.batch_size,
         text_empty=data_cfg.text_empty,
+        text_cache_root=args.vln_text_cache_root,
+        require_text_cache=args.require_vln_text_cache,
         max_episodes=args.max_vln_episodes,
         seed=args.seed,
     )
@@ -381,6 +431,8 @@ def main() -> None:
         log_every=args.log_every,
         seed=args.seed,
         output_root=str(args.output_root),
+        vln_text_cache_root=str(args.vln_text_cache_root),
+        require_vln_text_cache=bool(args.require_vln_text_cache),
     )
     preflight = {
         "event": "stage3_final_vln_cotrain_preflight",
@@ -392,7 +444,11 @@ def main() -> None:
         "source_checkpoint_step": int(source_ckpt["step"]),
         "policy_branch": "Register + Z_obs + empty/text + A_noise; no A_cur in policy forward",
         "loss": "L = lambda_ce * CE(combo_logits, action_combo) + lambda_video_replay * L_visual + lambda_pose_replay * L_pose",
-        "text_note": "Current prepared VLN T4 cache has raw instruction text but no UMT5 cache; this run uses empty UMT5 tokens as a chain/format cotrain run.",
+        "text": {
+            "vln_text_cache_root": str(args.vln_text_cache_root),
+            "require_vln_text_cache": bool(args.require_vln_text_cache),
+            "rule": "load per-sample VLN instruction UMT5 embedding; fallback to empty only when cache is missing",
+        },
     }
     write_json(run_dir / "formal_preflight.json", preflight)
     write_json(run_dir / "config.json", {"train": asdict(train_cfg), "stage2_data": data_cfg.to_dict(), "model": model.cfg.to_dict()})
@@ -454,6 +510,8 @@ def main() -> None:
                     "lr": optimizer.param_groups[0]["lr"],
                     "vln_history_iw": vln_meta_last.get("history_iw"),
                     "vln_action_valid": vln_meta_last.get("action_valid"),
+                    "vln_text_hits": vln_meta_last.get("text_hits"),
+                    "vln_text_fallbacks": vln_meta_last.get("text_fallbacks"),
                     "replay_history_iw": replay_meta_last.get("history_iw"),
                     "replay_datasets": replay_meta_last.get("datasets"),
                     **{f"train/{k}": v for k, v in metrics.items()},
