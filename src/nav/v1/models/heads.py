@@ -109,6 +109,51 @@ class FramePoseHead(nn.Module):
         return self.net(pooled)
 
 
+class DenseCameraQueryPoseHead(nn.Module):
+    """VGGT-style frame camera query readout that preserves spatial tokens.
+
+    Each latent frame owns one learned camera query.  The query cross-attends
+    to all spatial tokens in that frame before an MLP predicts
+    ``[tx, ty, tz, qw, qx, qy, qz, fov_x, fov_y]``.
+    """
+
+    def __init__(
+        self,
+        *,
+        hidden_dim: int,
+        patch_size: tuple[int, int, int] = (1, 2, 2),
+        num_heads: int = 8,
+        mlp_ratio: float = 1.0,
+        out_dim: int = 9,
+    ) -> None:
+        super().__init__()
+        self.patch_size = patch_size
+        self.query = nn.Parameter(torch.randn(1, 1, hidden_dim) * 0.02)
+        self.token_norm = nn.LayerNorm(hidden_dim)
+        self.query_norm = nn.LayerNorm(hidden_dim)
+        self.cross_attn = nn.MultiheadAttention(hidden_dim, num_heads, batch_first=True)
+        inner = max(hidden_dim, int(hidden_dim * mlp_ratio))
+        self.pose = nn.Sequential(
+            nn.LayerNorm(hidden_dim),
+            nn.Linear(hidden_dim, inner),
+            nn.GELU(),
+            nn.Linear(inner, out_dim),
+        )
+
+    def forward(self, obs_tokens: torch.Tensor, *, latent_shape: tuple[int, int, int]) -> torch.Tensor:
+        grid_t, grid_h, grid_w = _grid_shape(latent_shape, self.patch_size)
+        b, n, d = obs_tokens.shape
+        expected = grid_t * grid_h * grid_w
+        if n != expected:
+            raise ValueError(f"obs token count {n} != expected {expected}")
+        x = obs_tokens.view(b, grid_t, grid_h * grid_w, d)
+        x = self.token_norm(x)
+        x = x.reshape(b * grid_t, grid_h * grid_w, d)
+        q = self.query_norm(self.query).expand(b * grid_t, -1, -1)
+        cam, _ = self.cross_attn(q, x, x, need_weights=False)
+        return self.pose(cam[:, 0]).view(b, grid_t, -1)
+
+
 class FrameDepthHead(nn.Module):
     """Low-resolution dense depth probe from current/local visual hidden states.
 

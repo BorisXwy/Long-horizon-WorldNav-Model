@@ -22,7 +22,7 @@ if str(_IW_ROOT) not in sys.path:
 import infworld.models.dit_model as dit_model_module  # noqa: E402
 from infworld.models.dit_model import WanModel  # noqa: E402
 
-from nav.v1.models.heads import FramePoseHead  # noqa: E402
+from nav.v1.models.heads import DenseCameraQueryPoseHead, FramePoseHead  # noqa: E402
 from nav.v1.models.iw_aligned import (  # noqa: E402
     IWActionInterface,
     IWAlignedConfig,
@@ -54,6 +54,8 @@ class FinalStage2WanConfig:
     action_vocab_size: int = 12
     combo_action_vocab_size: int = 144
     pose_head_variant: str = "mlp"
+    pose_head_type: str = "frame_mlp"
+    pose_readout_layer: int = -1
     register_mode: str = "fixed_rnull_unified"
     register_injection: str = "condition_memory"
     register_condition_grid: tuple[int, int, int] = (4, 4, 8)
@@ -136,12 +138,35 @@ class FinalStage2WanModel(nn.Module):
             nn.LayerNorm(iw_cfg.latent_channels),
             nn.Linear(iw_cfg.latent_channels, iw_cfg.hidden_dim),
         )
-        self.pose_head = FramePoseHead(
-            hidden_dim=iw_cfg.hidden_dim,
-            patch_size=(1, 2, 2),
-            variant=iw_cfg.pose_head_variant,
-        )
+        if self.cfg.pose_head_type == "frame_mlp":
+            self.pose_head = FramePoseHead(
+                hidden_dim=iw_cfg.hidden_dim,
+                patch_size=(1, 2, 2),
+                variant=iw_cfg.pose_head_variant,
+            )
+        elif self.cfg.pose_head_type == "dense_camera_query":
+            self.pose_head = DenseCameraQueryPoseHead(
+                hidden_dim=iw_cfg.hidden_dim,
+                patch_size=(1, 2, 2),
+                num_heads=8,
+            )
+        else:
+            raise ValueError(f"unsupported pose_head_type: {self.cfg.pose_head_type}")
+        self._pose_layer_hidden: torch.Tensor | None = None
+        self._pose_layer_hook = None
+        if self.cfg.pose_readout_layer >= 0:
+            max_layer = len(self.backbone.blocks) - 1
+            if self.cfg.pose_readout_layer > max_layer:
+                raise ValueError(f"pose_readout_layer {self.cfg.pose_readout_layer} > max layer {max_layer}")
+            self._pose_layer_hook = self.backbone.blocks[self.cfg.pose_readout_layer].register_forward_hook(
+                self._capture_pose_layer_hidden
+            )
         self.hmpc_removed = False
+
+    def _capture_pose_layer_hidden(self, _module, _inputs, output) -> None:
+        if isinstance(output, tuple):
+            output = output[0]
+        self._pose_layer_hidden = output
 
     def remove_hmpc(self) -> None:
         self.backbone.latent_encoder = nn.Identity()
@@ -238,9 +263,16 @@ class FinalStage2WanModel(nn.Module):
     def video_flow_target(batch: dict[str, torch.Tensor], dtype: torch.dtype) -> torch.Tensor:
         return batch["z_future_noise"].to(dtype) - batch["z_future_target"].to(dtype)
 
-    def forward_core(self, batch: dict[str, torch.Tensor], *, return_prefix_hidden: bool = True) -> dict[str, Any]:
+    def forward_core(
+        self,
+        batch: dict[str, torch.Tensor],
+        *,
+        return_prefix_hidden: bool = True,
+        include_current_action_condition: bool = True,
+    ) -> dict[str, Any]:
         if not self.hmpc_removed:
             raise RuntimeError("load_wan_checkpoint() must be called before training")
+        self._pose_layer_hidden = None
         dtype = self.backbone.patch_embedding.weight.dtype
         history = batch["history_latents"].to(dtype)
         z_obs = batch["z_obs"].to(dtype)
@@ -262,15 +294,18 @@ class FinalStage2WanModel(nn.Module):
             action_timestep.to(device=z_obs.device),
             dtype=dtype,
         )
-        a_cur_condition = self.action_interface.current_condition(batch["a_cur_combo"].to(device=z_obs.device)).to(
-            device=z_obs.device,
-            dtype=dtype,
-        )
-        video_condition = (
-            torch.cat([register_condition, a_cur_condition], dim=1)
-            if register_condition is not None
-            else a_cur_condition
-        )
+        if include_current_action_condition:
+            a_cur_condition = self.action_interface.current_condition(batch["a_cur_combo"].to(device=z_obs.device)).to(
+                device=z_obs.device,
+                dtype=dtype,
+            )
+            video_condition = (
+                torch.cat([register_condition, a_cur_condition], dim=1)
+                if register_condition is not None
+                else a_cur_condition
+            )
+        else:
+            video_condition = register_condition
         policy_condition = register_condition
         noop = torch.zeros(b, 81, device=z_obs.device, dtype=torch.long)
         out = self.backbone(
@@ -301,8 +336,30 @@ class FinalStage2WanModel(nn.Module):
             "shared_action_hidden": shared_action_hidden,
             "action_outputs": self.action_interface.decode(shared_action_hidden),
             "prefix_video_hidden": prefix_hidden,
+            "pose_layer_hidden": self._pose_layer_hidden,
             "registers": registers,
         }
+
+    def pose_obs_hidden(self, out: dict[str, Any], batch: dict[str, torch.Tensor]) -> torch.Tensor:
+        if self.cfg.pose_readout_layer >= 0:
+            hidden = out.get("pose_layer_hidden")
+            if hidden is None:
+                raise RuntimeError(f"pose_readout_layer={self.cfg.pose_readout_layer} did not produce hidden states")
+            return self.current_obs_hidden(hidden, batch["z_obs"])
+        prefix = out.get("prefix_video_hidden")
+        if prefix is None:
+            raise RuntimeError("prefix_video_hidden is required for default pose readout")
+        return self.current_obs_hidden(prefix, batch["z_obs"])
+
+    @staticmethod
+    def _masked_mse(pred: torch.Tensor, target: torch.Tensor, mask: torch.Tensor | None) -> torch.Tensor:
+        target = target.to(device=pred.device, dtype=pred.dtype)
+        if mask is None:
+            return F.mse_loss(pred, target)
+        mask = mask.to(device=pred.device, dtype=pred.dtype)
+        while mask.ndim < pred.ndim:
+            mask = mask.unsqueeze(-1)
+        return (((pred - target) ** 2) * mask).sum() / mask.expand_as(pred).sum().clamp_min(1.0)
 
     def forward_stage2(self, batch: dict[str, torch.Tensor], *, lambda_pose: float) -> dict[str, torch.Tensor]:
         out = self.forward_core(batch, return_prefix_hidden=True)
@@ -310,15 +367,11 @@ class FinalStage2WanModel(nn.Module):
         visual_target = self.video_flow_target(batch, future_velocity.dtype)
         visual_loss = F.mse_loss(future_velocity, visual_target)
         if lambda_pose > 0:
-            obs_hidden = self.current_obs_hidden(out["prefix_video_hidden"], batch["z_obs"])
+            obs_hidden = self.pose_obs_hidden(out, batch)
             obs_hidden = obs_hidden.to(next(self.pose_head.parameters()).dtype)
             latent_shape = (batch["z_obs"].shape[2], batch["z_obs"].shape[3], batch["z_obs"].shape[4])
             pose_pred = self.pose_head(obs_hidden, latent_shape=latent_shape)
-            pose_target = batch["pose_target"].to(device=pose_pred.device, dtype=pose_pred.dtype)
-            pose_mask = batch["pose_mask"].to(device=pose_pred.device, dtype=pose_pred.dtype)
-            while pose_mask.ndim < pose_pred.ndim:
-                pose_mask = pose_mask.unsqueeze(-1)
-            pose_loss = (((pose_pred - pose_target) ** 2) * pose_mask).sum() / pose_mask.expand_as(pose_pred).sum().clamp_min(1.0)
+            pose_loss = self._masked_mse(pose_pred, batch["pose_target"], batch.get("pose_mask"))
         else:
             obs_hidden = None
             pose_pred = None
@@ -336,6 +389,71 @@ class FinalStage2WanModel(nn.Module):
             "loss_3d": pose_loss.detach(),
         }
 
+    def forward_stage3_policy(self, batch: dict[str, torch.Tensor], *, lambda_ce: float = 1.0) -> dict[str, torch.Tensor]:
+        """Final Stage3 policy/action loss on the shared Wan action tokens.
+
+        Policy mode uses ``Register + Z_obs + instruction/text + A_noise`` and
+        supervises the shared action-token output.  When categorical combo
+        labels are present, combo CE is the primary Stage3 loss; continuous
+        action flow stays as an auxiliary output for future ablations.
+        """
+
+        out = self.forward_core(
+            batch,
+            return_prefix_hidden=False,
+            include_current_action_condition=False,
+        )
+        action_outputs = out["action_outputs"]
+        if action_outputs is None:
+            raise RuntimeError("forward_stage3_policy requires shared action hidden")
+        pred_velocity = action_outputs["action_velocity"]
+        if "action_combo" in batch:
+            loss_action_flow = torch.zeros((), device=pred_velocity.device, dtype=pred_velocity.dtype)
+            combo_logits = action_outputs["combo_logits"]
+            combo_target = batch["action_combo"].to(device=combo_logits.device).long()
+            if combo_target.ndim == 1:
+                combo_logits = combo_logits[:, 0]
+            ce_all = F.cross_entropy(
+                combo_logits.reshape(-1, combo_logits.shape[-1]),
+                combo_target.reshape(-1),
+                reduction="none",
+            ).view_as(combo_target)
+        else:
+            action_target = batch["action_target"].to(device=pred_velocity.device, dtype=pred_velocity.dtype)
+            if action_target.ndim == 2:
+                pred_velocity = pred_velocity[:, 0]
+            if pred_velocity.shape != action_target.shape:
+                raise RuntimeError(
+                    f"action velocity shape {tuple(pred_velocity.shape)} != target {tuple(action_target.shape)}"
+                )
+            target_velocity = action_target - batch["a_noise"].to(device=pred_velocity.device, dtype=pred_velocity.dtype)
+            loss_action_flow = self._masked_mse(pred_velocity, target_velocity, batch.get("action_loss_mask"))
+            primitive_logits = action_outputs["primitive_logits"]
+            primitive_target = batch["action_primitives"].to(device=primitive_logits.device).long()
+            if primitive_target.ndim == 1:
+                primitive_logits = primitive_logits[:, 0]
+            ce_all = F.cross_entropy(
+                primitive_logits.reshape(-1, primitive_logits.shape[-1]),
+                primitive_target.reshape(-1),
+                reduction="none",
+            ).view_as(primitive_target)
+        mask = batch.get("action_loss_mask")
+        if mask is not None:
+            mask = mask.to(device=ce_all.device, dtype=ce_all.dtype)
+            loss_ce = (ce_all * mask).sum() / mask.sum().clamp_min(1.0)
+        else:
+            loss_ce = ce_all.mean()
+        loss = loss_action_flow + float(lambda_ce) * loss_ce
+        return {
+            **out,
+            "loss": loss,
+            "loss_action_flow": loss_action_flow.detach(),
+            "loss_ce_aux": loss_ce.detach(),
+            "action_velocity": pred_velocity,
+            "primitive_logits": action_outputs["primitive_logits"],
+            "combo_logits": action_outputs["combo_logits"],
+        }
+
     def structural_report(self) -> dict[str, Any]:
         return {
             "model_class": type(self).__name__,
@@ -348,6 +466,8 @@ class FinalStage2WanModel(nn.Module):
             "z_obs_stream": self.cfg.z_obs_stream,
             "a_cur_injection": self.cfg.action_condition_injection,
             "a_noise_path": "shared_action_tokens_main_stream",
+            "pose_head_type": self.cfg.pose_head_type,
+            "pose_readout_layer": self.cfg.pose_readout_layer,
             "branch_mask_rule": "A_noise and Z_future_noise are mutually isolated in Wan self-attention",
             "policy_condition_rule": "A_noise/action tokens read Register-only policy condition; A_cur is video-only",
             "use_channel_mask": False,

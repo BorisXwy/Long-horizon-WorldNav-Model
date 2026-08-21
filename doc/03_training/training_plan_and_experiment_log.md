@@ -7980,3 +7980,58 @@ probe_layer16:
 说明该 sampled window 的真实运动很小；pred 主要表现为整体偏置/漂移。因此
 后续正式 head 改造时，建议优先采用 layer16 + camera-query spatial readout，
 同时增加更大样本的 trajectory 分布统计，避免只看少量低运动窗口。
+
+## 2026-08-21：启动两路后续训练
+
+根据 layer probe 结果和 Stage3 数据准备现状，新增两条正式训练入口：
+
+1. `scripts/train_v1_stage2_final_probe_layer16_cotrain.py`
+   - 从当前 final Stage2 checkpoint 继续初始化：
+     `log/v1_stage2_final_cotrain/stage2_final_branchmask_policyreg_venv_iw14816_20260819_015948/checkpoints/step_002000.pt`
+   - 保留原 video generation / Register / action interface。
+   - 将正式 3D head 改为 `DenseCameraQueryPoseHead`。
+   - pose readout 从 Wan block layer16 hidden 读取 current `Z_obs` token。
+   - 旧 mean-pooling `FramePoseHead` 权重不加载，新 pose head 随机初始化；
+     backbone/register/action/video 权重从 step2000 加载。
+
+2. `scripts/train_v1_stage3_final_vln_cotrain.py`
+   - 从同一个 final Stage2 step2000 checkpoint 继续。
+   - 使用已经准备好的 VLN T4 micro-latents：
+     `/sharedata/NAV/derived/v1/vln/t4_micro_latents_500g/rxr_budget500_stream_20260821_0000/manifests/encoded_episodes.jsonl`
+   - 当前可用数据约：
+     `episodes ≈ 4901`，`history_iw=1` 可构造 `windows ≈ 14045`。
+   - policy forward 中不输入 `A_cur`；policy branch 读取
+     `Register + Z_obs + text/empty + A_noise`。
+   - 当前 VLN T4 cache 有 raw instruction，但还没有 UMT5 text cache；
+     因此本次先使用 empty UMT5 token，是结构/链路与 action-policy cotrain
+     验证，不代表最终 instruction-conditioned VLN 效果。
+   - loss：
+
+```text
+L_stage3 =
+  lambda_ce * CE(combo_logits, action_combo)
+  + lambda_video_replay * L_visual
+  + lambda_pose_replay  * L_pose
+```
+
+smoke test：
+
+```text
+stage2_probe_layer16 smoke:
+  run = log/v1_stage2_final_probe_layer16_cotrain/smoke_stage2_probe_l16_1step_20260821
+  ebs = 16
+  seconds/step ≈ 100.05
+  cuda_max_memory ≈ 28.10 GB
+  train/loss_visual ≈ 0.0628
+
+stage3_final_vln smoke:
+  run = log/v1_stage3_final_vln_cotrain/smoke_stage3_final_vln_1step_20260821_b
+  ebs = 16
+  seconds/step ≈ 172.56
+  cuda_max_memory ≈ 28.10 GB
+  train/loss_policy = train/loss_ce_aux ≈ 5.47
+  train/loss_video_replay ≈ 0.0794
+```
+
+注意：Stage3 每个 grad accumulation micro-batch 包含一次 policy forward/backward
+和一次 Stage2 replay forward/backward，因此单步时间约为 Stage2 的 1.7 倍。
