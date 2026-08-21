@@ -7900,3 +7900,83 @@ paired mean visual diff candidate - baseline = -0.1160
 和 eval1000 均恢复到低 visual 区间；robust recent stats、fixed-seed eval
 和与 baseline 的 paired comparison 均支持“最新结构可稳定训练并优于 legacy
 move/view 条件分支”的结论。
+
+## 2026-08-21：Stage2 layer probe 与轨迹可视化检查
+
+背景：当前 Stage2 final cotrain 的内置 `FramePoseHead` 从 current `Z_obs`
+prefix hidden 读取 pose，但该 head 会对空间 token 做 mean pooling。为了确认
+3D 信息是否已经存在于 backbone/register 表征中，新增 frozen-backbone layer
+probe sweep：冻结完整 Stage2 模型，只在不同 Wan block hidden state 上训练
+VGGT-style camera-query pose probe。
+
+probe sweep 设置：
+
+```text
+checkpoint = log/v1_stage2_final_cotrain/stage2_final_branchmask_policyreg_venv_iw14816_20260819_015948/checkpoints/step_002000.pt
+data       = RE10K, history_iw=1
+layers     = 4,8,12,16,20,24,29
+steps      = 500
+probe      = DenseCameraQueryPoseProbe
+readout    = per-frame camera query cross-attention over spatial tokens
+```
+
+最终 eval step500 排名：
+
+```text
+layer 16  pose_mse 0.003007  trans 0.04338  rot 7.062°  fov 0.05517
+layer 12  pose_mse 0.003428  trans 0.04498  rot 6.983°  fov 0.06416
+layer 29  pose_mse 0.004056  trans 0.05877  rot 3.921°  fov 0.07875
+layer  8  pose_mse 0.004255  trans 0.05197  rot 8.201°  fov 0.07330
+layer 20  pose_mse 0.004929  trans 0.08013  rot 7.493°  fov 0.06098
+layer  4  pose_mse 0.005048  trans 0.04533  rot 10.609° fov 0.08123
+layer 24  pose_mse 0.005203  trans 0.05470  rot 6.698°  fov 0.08847
+```
+
+结论：layer16 是当前 frozen probe 中最优读出层。probe 的 `pose_mse`
+显著低于此前直接挂在模型里的 attached pose head 的 eval 量级，说明当前
+backbone/register 中已有可读 3D 信息；主要问题更可能是正式 3D head 的读层
+和读出结构，而不是表征中完全没有几何。
+
+轨迹可视化逻辑检查：
+
+- Stage2 pose target 格式确认为 `[tx,ty,tz,qw,qx,qy,qz,fov_x,fov_y]`。
+- quaternion error 使用 pred/GT 的同一 `wxyz` 排布做 normalized absolute dot，
+  计算 rotation angle，逻辑正确。
+- 轨迹图画的是当前 Stage2 监督目标中的 relative transform translation
+  三维分量，用于检查 pred/GT 对齐；它不是额外换算后的 global/absolute camera
+  center。
+- 修正 `scripts/visualize_v1_stage2_pose.py` 中原先错误的格式说明，并新增
+  `--probe-checkpoint/--probe-layer`，支持同一批样本同时可视化 attached head
+  与 frozen probe head。
+- 新增 shared-axis comparison 图，避免不同 head 的 3D 轨迹图各自 autoscale
+  造成肉眼误判。
+
+本次可视化：
+
+```text
+output = result/v1_stage2_pose_visualization/step2000_attached_vs_probe_l16_20260821_trajectory_check
+heads  = attached_head, probe_layer16
+samples = 4
+```
+
+4 个样本 aggregate：
+
+```text
+attached_head:
+  translation_l2 = 0.08630
+  rotation_deg   = 7.28295
+  fov_abs        = 0.03575
+  pose_mse       = 0.002637
+
+probe_layer16:
+  translation_l2 = 0.09823
+  rotation_deg   = 6.88045
+  fov_abs        = 0.03959
+  pose_mse       = 0.002087
+```
+
+小样本可视化结论：probe_layer16 在整体 pose MSE 上更优，但 translation/FOV
+分量不保证每个样本都优于 attached head。sample000 的 GT 四帧几乎重合，
+说明该 sampled window 的真实运动很小；pred 主要表现为整体偏置/漂移。因此
+后续正式 head 改造时，建议优先采用 layer16 + camera-query spatial readout，
+同时增加更大样本的 trajectory 分布统计，避免只看少量低运动窗口。
