@@ -1,6 +1,6 @@
-# NAV 文档维护约定
+# NAV Agent 工作约定
 
-本文件约束 `NAV/doc/` 下的新增、迁移和更新。
+本文件约束 agent 在 `NAV/` 项目中的代码、文档、实验和写作工作；其中 `doc/` 是知识库，`log/` 与 `result/` 是运行产物目录。
 
 ## 必须遵循
 
@@ -33,21 +33,21 @@ stage2 probe sweep: add frozen-backbone layer probes and docs
 
 ## 唯一事实来源
 
-- 当前状态总览：`00_overview/project_status.md`
-- 项目规则与文档规范：`00_overview/project_rules_and_documentation_standard.md`
+- 当前状态总览：`doc/00_overview/project_status.md`
+- 项目规则与文档规范：`doc/00_overview/project_rules_and_documentation_standard.md`
 - 最终正式结构、训练与 acceptance 硬标准：
-  `00_overview/final_formal_training_standard.md`
+  `doc/00_overview/final_formal_training_standard.md`
 - 当前 V1 模型结构、接口、历史模型尝试与待定项：
-  `01_model/model_evolution_and_current_architecture.md`
+  `doc/01_model/model_evolution_and_current_architecture.md`
 - 下载、预处理、Action/Geometry Schema 与 VLN 渲染状态：
-  `02_data/data_preparation_schema_and_status.md`
+  `doc/02_data/data_preparation_schema_and_status.md`
 - V1/V0 训练计划、Stage One/Two/Three、课程与实验记录：
-  `03_training/training_plan_and_experiment_log.md`
+  `doc/03_training/training_plan_and_experiment_log.md`
 - 评测协议、外部复现与 benchmark 调研：
-  `04_evaluation/evaluation_reproduction_and_benchmarks.md`
-- Insight 问题寄存器：`05_insight/insight_log.md`
-- 资源路径：`06_operations/resource_inventory.md`
-- 关键方案变更：`00_overview/decision_log.md`
+  `doc/04_evaluation/evaluation_reproduction_and_benchmarks.md`
+- Insight 问题寄存器：`doc/05_insight/insight_log.md`
+- 资源路径：`doc/06_operations/resource_inventory.md`
+- 关键方案变更：`doc/00_overview/decision_log.md`
 
 ## V0/V1 阅读规则
 
@@ -70,12 +70,12 @@ stage2 probe sweep: add frozen-backbone layer probes and docs
 4. 检查命令以 `scripts/check_v1_vae_pack_encode.sh` 或当前 T4 micro latent
    专用检查脚本为准。
 
-`repointro.md` 只是兼容入口，不得重复维护资源内容。
+`doc/repointro.md` 只是兼容入口，不得重复维护资源内容。
 
 ## V1 架构硬规则
 
 0. **2026-08-18 起的最终正式训练标准**：完整标准单独维护在
-   `00_overview/final_formal_training_standard.md`。后续所有声称为“最终结构 / 正式训练 /
+   `doc/00_overview/final_formal_training_standard.md`。后续所有声称为“最终结构 / 正式训练 /
    acceptance”的 run，必须同时满足以下条件；只满足其中一部分的 run 只能标为
    `gate`、`ablation` 或 `diagnostic`：
    - 使用新版结构：保留多类 token 交互，包含 video generation branch 与
@@ -145,7 +145,7 @@ stage2 probe sweep: add frozen-backbone layer probes and docs
 
 ## 修改后检查
 
-1. 新文档是否加入 `README.md` 注册表。
+1. 新文档是否加入根目录 `README.md` 的文档注册表。
 2. 路径是否同步到资源总账。
 3. 方案变化是否新增决策日志条目。
 4. 训练或评测口径是否同步到 config、script 与结果说明。
@@ -223,7 +223,7 @@ agent（含自动化训练、评测、调研、写作）的任何工作必须**�
 
 ## Insight 分析规则
 
-`05_insight/insight_log.md` 记录对 NAV idea 与网络设计的改进分析，受以下
+`doc/05_insight/insight_log.md` 记录对 NAV idea 与网络设计的改进分析，受以下
 规则约束：
 
 1. 每次新分析前必须先把此前所有问题压缩进该文件的"问题寄存器"表并标注
@@ -232,5 +232,5 @@ agent（含自动化训练、评测、调研、写作）的任何工作必须**�
    采纳或显式废弃）后，才允许开启下一轮新分析。
 3. Insight 主体必须详细：动机、对应已调研工作、具体改法（不动 Wan2.1
    backbone）、预期收益、可验证实验指针、风险。
-4. Insight 不等于决策；被采纳并写入 `01_model/` 或 `03_training/` 且在
-   `decision_log.md` 记录后才成为正式方案。
+4. Insight 不等于决策；被采纳并写入 `doc/01_model/` 或 `doc/03_training/` 且在
+   `doc/00_overview/decision_log.md` 记录后才成为正式方案。
