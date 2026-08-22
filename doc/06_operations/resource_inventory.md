@@ -5,7 +5,7 @@
 | 文档 ID | `NAV-OPS-001` |
 | 类型 | 资源总账（Resource Inventory） |
 | 状态 | Live / Source of Truth |
-| 更新时间 | 2026-08-22（latent 落盘策略切到 NAV/data/train） |
+| 更新时间 | 2026-08-22（R2R train 优先准备中） |
 | 职责 | 维护数据、权重、环境、仓库、日志和结果的唯一标准路径 |
 
 本文档记录 NAV 新实验可直接使用的数据集、预训练权重和本地参考仓库。
@@ -41,8 +41,12 @@ future_4]` sparse pack 只保留为历史速度记录。
 | V1 HDF5 shard 目标 | `/sharedata/NAV/derived/v1/vae_packs_hdf5_fullgpu14_7x7/` | LeRobot-like index + shard 格式；14路 full-GPU 编码 |
 | V1 Stage3 VLN raw policy | `/sharedata/NAV/derived/v1/vln/raw_policy/` | CPU-only 构建 episode/action/policy chunk manifest |
 | V1 Stage3 VLN rendered obs | `/sharedata/NAV/derived/v1/vln/rendered_obs/` | Habitat-Sim RGB 渲染输出；当前 R2R-CE standard train/val_seen/val_unseen 正在 GPU0 后台准备 |
-| V1 Stage3 VLN 500GiB stoppad budget | `/sharedata/NAV/derived/v1/vln/raw_policy_budgeted/stage3_vln_budget_t4_500g_stoppad_20260822_1423/` | RxR guide/follower train budget；terminal STOP 按吸收态 padding；manifest 与预算仍在 sharedata |
-| V1 Stage3 VLN T4 latent | `NAV/data/train/rxr_ce/t4_micro_latents_stoppad_20260822_1423/` | 当前正式 V1 `T_latent=4` micro latent；真实 `.pt` 写在个人 NAV/data/train，encoder 监听 sharedata render 并续写到此处 |
+| V1 Stage3 RxR 500GiB stoppad budget | `/sharedata/NAV/derived/v1/vln/raw_policy_budgeted/stage3_vln_budget_t4_500g_stoppad_20260822_1423/` | RxR guide/follower train budget；terminal STOP 按吸收态 padding；manifest 与预算仍在 sharedata；2026-08-22 16:05 起已暂停后台任务，保留已生成 latent |
+| V1 Stage3 RxR T4 latent | `NAV/data/train/rxr_ce/t4_micro_latents_stoppad_20260822_1423/` | RxR stoppad 已生成部分；真实 `.pt` 写在个人 NAV/data/train，后续可从该目录恢复续写 |
+| V1 Stage3 R2R train stoppad budget | `/sharedata/NAV/derived/v1/vln/raw_policy_budgeted/stage3_vln_budget_r2r_train_stoppad_20260822_1604/` | R2R train 全量；`10,819 episodes / 1,063,870 frames / 87,345 T4 micro chunks / 65.31 GiB latent` |
+| V1 Stage3 R2R train rendered obs | `/sharedata/NAV/derived/v1/vln/rendered_obs/stage3_vln_render_r2r_train_stoppad_gpu0_20260822_1605/` | Habitat-Sim 临时 PNG；渲染后由 stream encoder 校验 latent 并删除 PNG |
+| V1 Stage3 R2R train T4 latent | `NAV/data/train/r2r_ce/t4_micro_latents_stoppad_20260822_1605/` | 当前优先准备的正式 V1 `T_latent=4` VLN latent |
+| V1 Stage3 R2R train instruction embedding | `NAV/data/train/r2r_ce/text_embeddings_stoppad_20260822_1605/` | R2R latent 完成后自动缓存 Wan UMT5 instruction embedding；由后台 watcher 触发 |
 | V1 full-pipeline smoke | `NAV/log/full_pipeline_smoke/v1_full_pipeline_smoke_20260814_014744/report.json` | 当前完整模型链路验证：Stage1/2/3 train + videogen/policy inference |
 | V1 Stage2 RE10K pose-only formal run | `NAV/log/v1_stage2_re10k_pose_video/v1_stage2_re10k_poseonly_formal_wanfull_re10k_20260814_092440/` | 正在运行；RE10K-only，完整 T4 latent `[16,4,56,112]`，Wan-size 30 layers，Register 128，pose-only supervision |
 | V1 Stage2 cotrain 原始组 | `NAV/log/v1_stage2_re10k_pose_video/v1_stage2_re10k_poseonly_sharedwan_wanfull_2k_20260814_223648/` | 当前运行；`pose_head=mlp`、`lambda_pose=0.1`、完整 shared WanBlock |

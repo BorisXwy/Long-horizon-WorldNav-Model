@@ -44,13 +44,30 @@ NAV/data/train/rxr_ce/t4_micro_latents_stoppad_20260822_1423/
 继续续写；render 仍使用 `/sharedata/NAV/derived/v1/vln/rendered_obs/` 作为临时
 PNG 中间态，完成 latent 校验后删除 PNG。
 
+2026-08-22 16:05 更新：按“优先做 R2R train”的调度，已暂停 RxR 500GiB
+stoppad 后台 renderer/encoder，保留已生成的 RxR latent 不删除；新建
+`r2r_ce:standard:train` 全量 STOP-padding budget，并启动 R2R train 优先准备。
+本次 R2R train manifest 覆盖 `10,819 episodes / 1,063,870 frames /
+87,345 T4 micro chunks`，预计 latent `65.31 GiB`。latent 写入个人项目目录
+`NAV/data/train/r2r_ce/t4_micro_latents_stoppad_20260822_1605/`；instruction
+embedding watcher 已挂起，等待 R2R latent encoder 全部退出后自动缓存到
+`NAV/data/train/r2r_ce/text_embeddings_stoppad_20260822_1605/`。
+
 当前后台任务：
 
 | tmux | GPU | 任务 | 输出 / 日志 |
 | --- | ---: | --- | --- |
-| `nav_v1_stage3_vln_render_stoppad_gpu0` | 0 | 渲染 RxR guide/follower train budget 子集；terminal STOP 后复制 terminal observation 到可构造 policy window | `/sharedata/NAV/derived/v1/vln/rendered_obs/stage3_vln_render_rxr_budget500_stoppad_gpu0_20260822_1423/`；`log/v1_data_prep/stage3_vln_render_rxr_budget500_stoppad_gpu0_20260822_1423.log` |
-| `nav_v1_stage3_vln_encode_stoppad_gpu0_s0..s4` | 0 | 5 路 hash-sharded stream encoder 监听 stoppad render manifest，在线编码 V1 `T_latent=4` micro latent，并在校验后删除 PNG；`num_shards=5`、`shard_index=0..4`，用于吃满 GPU0 | `NAV/data/train/rxr_ce/t4_micro_latents_stoppad_20260822_1423/`；`log/v1_data_prep/stage3_vln_t4_stream_rxr_budget500_stoppad_navdata_gpu0_shard*_of5_20260822_1423.log` |
-| `nav_v1_stage3_vln_render_stoppad_guard` | CPU | 监控 `/sharedata`，若 free `<400GiB` 自动停止 render，让 encoder/cleanup 追空间 | `log/v1_data_prep/vln_render_disk_guard_stoppad_20260822_1423.log` |
+| `nav_v1_stage3_vln_render_r2r_train_gpu0` | 0 | 优先渲染 R2R train 全量；terminal STOP 后复制 terminal observation 到可构造 policy window | `/sharedata/NAV/derived/v1/vln/rendered_obs/stage3_vln_render_r2r_train_stoppad_gpu0_20260822_1605/`；`log/v1_data_prep/stage3_vln_render_r2r_train_stoppad_gpu0_20260822_1605.log` |
+| `nav_v1_stage3_vln_encode_r2r_train_gpu0_s0..s5` | 0 | 6 路 hash-sharded stream encoder 监听 R2R train render manifest，在线编码 V1 `T_latent=4` micro latent，并在校验后删除 PNG；`num_shards=6`、`shard_index=0..5` | `NAV/data/train/r2r_ce/t4_micro_latents_stoppad_20260822_1605/`；`log/v1_data_prep/stage3_vln_t4_stream_r2r_train_stoppad_navdata_gpu0_shard*_of6_20260822_1605.log` |
+| `nav_v1_stage3_vln_text_r2r_train_after_latent` | 0（latent 结束后） | 等待 R2R latent encoder 结束后，顺序缓存 R2R instruction UMT5 embedding | `NAV/data/train/r2r_ce/text_embeddings_stoppad_20260822_1605/`；`log/v1_data_prep/stage3_vln_text_r2r_train_stoppad_after_latent_20260822_1605.log` |
+| `nav_v1_stage3_vln_render_r2r_train_guard` | CPU | 监控 `/sharedata`，若 free `<400GiB` 自动停止 render，让 encoder/cleanup 追空间 | `log/v1_data_prep/vln_render_disk_guard_r2r_train_stoppad_20260822_1605.log` |
+
+已暂停但保留结果的 RxR 任务：
+
+```text
+render: NAV/data/train/rxr_ce/t4_micro_latents_stoppad_20260822_1423/
+raw rendered tmp: /sharedata/NAV/derived/v1/vln/rendered_obs/stage3_vln_render_rxr_budget500_stoppad_gpu0_20260822_1423/
+```
 
 新增脚本：
 
