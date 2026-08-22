@@ -5,18 +5,21 @@
 | 文档 ID | `NAV-OPS-001` |
 | 类型 | 资源总账（Resource Inventory） |
 | 状态 | Live / Source of Truth |
-| 更新时间 | 2026-08-14（V1 full-pipeline smoke / old executable cleanup） |
+| 更新时间 | 2026-08-22（latent 落盘策略切到 NAV/data/train） |
 | 职责 | 维护数据、权重、环境、仓库、日志和结果的唯一标准路径 |
 
 本文档记录 NAV 新实验可直接使用的数据集、预训练权重和本地参考仓库。
 路径均已在当前机器上确认存在。新增资源时请同步补充用途、格式和验证状态。
+自 2026-08-22 起，训练 latent / tensor cache 的真实落盘根目录为
+`NAV/data/train/<dataset>/<latent_run>/`；公共 `/sharedata` 只保留原始数据、
+assets、轻量 manifest 和必要临时 render 中间态。
 
-当前 V1 技术设计入口是 `NAV/doc/01_design/v1_action_centered_io_interface.md`。
+当前 V1 技术设计入口是 `NAV/doc/01_model/model_evolution_and_current_architecture.md`。
 V0 InfiniteWorld/Register A/B 旧方案保留在
-`NAV/doc/01_design/v0_stage_one_register_world_model.md`，只作为历史和 baseline。
+`NAV/doc/01_model/model_evolution_and_current_architecture.md`，只作为历史和 baseline。
 
 Infinite-World 的目录结构、完整推理调用链、HPMC 代码实现及其与论文的逐项
-一致性检查记录在 `NAV/doc/02_architecture/v0_infinite_world_implementation.md`。
+一致性检查记录在 `NAV/doc/01_model/model_evolution_and_current_architecture.md`。
 
 ## V1 action-centered 数据资源
 
@@ -38,9 +41,20 @@ future_4]` sparse pack 只保留为历史速度记录。
 | V1 HDF5 shard 目标 | `/sharedata/NAV/derived/v1/vae_packs_hdf5_fullgpu14_7x7/` | LeRobot-like index + shard 格式；14路 full-GPU 编码 |
 | V1 Stage3 VLN raw policy | `/sharedata/NAV/derived/v1/vln/raw_policy/` | CPU-only 构建 episode/action/policy chunk manifest |
 | V1 Stage3 VLN rendered obs | `/sharedata/NAV/derived/v1/vln/rendered_obs/` | Habitat-Sim RGB 渲染输出；当前 R2R-CE standard train/val_seen/val_unseen 正在 GPU0 后台准备 |
+| V1 Stage3 VLN 500GiB stoppad budget | `/sharedata/NAV/derived/v1/vln/raw_policy_budgeted/stage3_vln_budget_t4_500g_stoppad_20260822_1423/` | RxR guide/follower train budget；terminal STOP 按吸收态 padding；manifest 与预算仍在 sharedata |
+| V1 Stage3 VLN T4 latent | `NAV/data/train/rxr_ce/t4_micro_latents_stoppad_20260822_1423/` | 当前正式 V1 `T_latent=4` micro latent；真实 `.pt` 写在个人 NAV/data/train，encoder 监听 sharedata render 并续写到此处 |
 | V1 full-pipeline smoke | `NAV/log/full_pipeline_smoke/v1_full_pipeline_smoke_20260814_014744/report.json` | 当前完整模型链路验证：Stage1/2/3 train + videogen/policy inference |
+| V1 Stage2 RE10K pose-only formal run | `NAV/log/v1_stage2_re10k_pose_video/v1_stage2_re10k_poseonly_formal_wanfull_re10k_20260814_092440/` | 正在运行；RE10K-only，完整 T4 latent `[16,4,56,112]`，Wan-size 30 layers，Register 128，pose-only supervision |
+| V1 Stage2 cotrain 原始组 | `NAV/log/v1_stage2_re10k_pose_video/v1_stage2_re10k_poseonly_sharedwan_wanfull_2k_20260814_223648/` | 当前运行；`pose_head=mlp`、`lambda_pose=0.1`、完整 shared WanBlock |
+| V1 Stage2 video-only 对照 | `NAV/log/v1_stage2_re10k_pose_video/v1_stage2_re10k_videoonly_sharedwan_wanfull_2k_20260815_025913/` | 已停止；`lambda_pose=0.0`，用于确认原 cotrain 的 `loss_visual` 与 video-only 几乎重合 |
+| V1 Stage2 强 pose 对照 | `NAV/log/v1_stage2_re10k_pose_video/v1_stage2_re10k_pose_linear_lam1_sharedwan_wanfull_2k_20260815_143827/` | 当前运行；`pose_head=linear`、`lambda_pose=1.0`，检查 3D loss 是否能更明显 reshape shared backbone |
+| V1 Stage2 cotrain TensorBoard | `6017` | `cotrain_mlp_lam0p1` vs `cotrain_linear_lam1` |
+| V1 Stage2 RE10K pose-only formal 文档 | `NAV/doc/03_training/training_plan_and_experiment_log.md` | 当前正式 Stage Two 验证训练的配置、preflight、loss、日志入口 |
+| V1 Stage2 RE10K pose-video diagnostic | `NAV/log/v1_stage2_re10k_pose_video/v1_stage2_re10k_pose_video_1000step_20260814_022646/` | 非验收证据；缩小了 latent spatial resolution 与 backbone depth，只保留为调试追溯 |
+| V1 Stage2 RE10K pose-video diagnostic eval | `NAV/result/v1_stage2_re10k_pose_video/v1_stage2_re10k_pose_video_1000step_20260814_022646/eval_metrics.json` | 非验收证据；不得用于证明 Stage Two 方案有效 |
+| V1 Stage2 RE10K diagnostic 文档 | `NAV/doc/03_training/training_plan_and_experiment_log.md` | 记录该 diagnostic 为什么无效，以及后续 pose-only 正式训练约束 |
 | V1 Stage1 historical runs | `NAV/log/v1-stageone-final-wan21official-actioniface-window-longhist-mb1-ebs16-1000-20260811-023650/` | 旧 action-interface run；仅保留为历史，不再代表当前代码 |
-| V1 schema 文档 | `NAV/doc/03_data/v1_action_geometry_schema.md` | ActionChunk、VaePack、GeometryTarget、V1Sample |
+| V1 schema 文档 | `NAV/doc/02_data/data_preparation_schema_and_status.md` | ActionChunk、VaePack、GeometryTarget、V1Sample |
 
 ### V1 T4 micro latent spatial20 准备
 
@@ -206,6 +220,55 @@ bash NAV/scripts/check_v1_stage3_vln_raw.sh
 2026-08-12 启动 R2R-CE standard train / val_seen / val_unseen 的 Habitat RGB
 渲染。输出写入 `/sharedata/NAV/derived/v1/vln/rendered_obs/`，不回写 raw policy
 skeleton。
+
+2026-08-20 扩展启动 500GiB latent 预算子集：已有 R2R rendered RGB 约
+`59,056` 个 T4 micro chunks / `44.16 GiB` latent；新增 RxR guide/follower
+train round-robin 选择 `74,584` episodes / `7,800,027` frames / `609,687`
+T4 micro chunks / `455.85 GiB` latent。组合目标约 `500.0 GiB` latent。
+当前 `/sharedata` 剩余约 `1.8T`，而新增 RxR raw PNG 中间态按抽样估计约
+`1.89 TiB`，存在磁盘风险；后续应改为编码确认后清理 RGB 或流式
+render→encode。
+
+2026-08-21 已切换为在线清理：`encode_v1_stage3_vln_t4_stream.py` 监听
+RxR render manifest，完成一个 episode 就编码为 `T_latent=4` micro latent，
+校验 `.pt` 可读后删除该 episode 的 `*.png`，保留 `render_meta.json` 与
+`latent_cleanup.json`。同时启动 disk guard：当 `/sharedata` free `<400GiB`
+时自动停止 RxR render，保留 stream encoder 继续回收空间。R2R existing encoder
+已暂停，待 RxR raw PNG 风险解除后恢复。
+
+```text
+tmux:
+  nav_v1_stage3_vln_render_rxr_budget500_gpu1
+  nav_v1_stage3_vln_t4_stream_rxr_gpu1
+  nav_v1_stage3_vln_disk_guard
+
+budget:
+  /sharedata/NAV/derived/v1/vln/raw_policy_budgeted/
+    stage3_vln_budget_t4_500g_with_existing_r2r_20260820_1259/
+
+render:
+  /sharedata/NAV/derived/v1/vln/rendered_obs/
+    stage3_vln_render_rxr_budget500_gpu1_20260820_1830/
+
+latent:
+  /sharedata/NAV/derived/v1/vln/t4_micro_latents_500g/
+    r2r_existing_20260820_1830/
+    rxr_budget500_stream_20260821_0000/
+
+logs:
+  NAV/log/v1_data_prep/stage3_vln_render_rxr_budget500_gpu1_20260820_1830.log
+  NAV/log/v1_data_prep/stage3_vln_t4_encode_r2r_gpu1_20260820_1830.log
+  NAV/log/v1_data_prep/stage3_vln_t4_stream_rxr_gpu1_20260821_0000.log
+  NAV/log/v1_data_prep/vln_render_disk_guard_20260821_0000.log
+
+scripts:
+  NAV/scripts/datasets/build_v1_stage3_vln_budget_manifest.py
+  NAV/scripts/datasets/build_v1_stage3_vln_t4_micro_manifest.py
+  NAV/scripts/datasets/render_v1_stage3_vln_obs.py
+  NAV/scripts/datasets/encode_v1_t4_micro_latents.py
+  NAV/scripts/datasets/encode_v1_stage3_vln_t4_stream.py
+  NAV/scripts/watch_vln_render_disk_guard.sh
+```
 
 ```text
 tmux:
@@ -382,16 +445,16 @@ early signal:
 DDP bucket 显存）。
 
 VGGT-Ω 的完整网络、Register Token、交替注意力、预测头及其对 NAV Stage One
-的适配边界记录在 `NAV/doc/02_architecture/vggt_omega_register_architecture.md`。
+的适配边界记录在 `NAV/doc/01_model/model_evolution_and_current_architecture.md`。
 
 当前两-chunk 数据限制、Infinite-World 与 LingBot-World 的长视频构造方式、
 公开长视频数据集和推荐的数据课程记录在
-`NAV/doc/03_data/long_video_dataset_survey.md`。
+`NAV/doc/02_data/data_preparation_schema_and_status.md`。
 
 交给协作者执行的五个长视频数据集准备标准、统一 manifest、目录规范和分阶段
-验收要求记录在 `NAV/doc/03_data/dataset_preparation_specification.md`。
+验收要求记录在 `NAV/doc/02_data/data_preparation_schema_and_status.md`。
 实际下载、授权阻塞、metadata 统计和公共目录配置进度记录在
-`NAV/doc/03_data/dataset_preparation_status.md`。
+`NAV/doc/02_data/data_preparation_schema_and_status.md`。
 
 ## 项目目录结构
 
@@ -424,7 +487,7 @@ VGGT-Ω 的完整网络、Register Token、交替注意力、预测头及其对 
 | NAV Wan VAE latent cache | `/sharedata/RealEstate10K/nav_register/latents` | 269个两-chunk cache；每个 chunk 为 `[1,16,21,56,112]` |
 
 NAV 的 RE10K 数据转换、伪动作规则、两种 Register 注入方案、端到端训练结果和
-运行状态见 `NAV/doc/04_training/v0_register_re10k_experiments.md`。
+运行状态见 `NAV/doc/03_training/training_plan_and_experiment_log.md`。
 
 ### R2R / R2R-CE
 
@@ -488,7 +551,7 @@ test_challenge 9557。原始 `gs://rxr-data` jsonl/pose traces 本机未落盘
 | REVERIE 变体包 | `/sharedata/datasets/ScaleVLN/raw/OpenGVLab/rvr_data.zip` | 约 8.5 GB |
 | RxR StreamVLN sidecar | `/sharedata/datasets/RxR/annotations/streamvln_rxr_annotations` | `annotations.json` 41 MB |
 
-四套 VLN 的实时整备状态见 `NAV/doc/03_data/vln_dataset_preparation_status.md`。
+四套 VLN 的实时整备状态见 `NAV/doc/02_data/data_preparation_schema_and_status.md`。
 
 ### R2R-CE SOTA 复现（≥ StreamVLN，DEC-021 / NAV-EVL-002）
 
@@ -503,7 +566,7 @@ test_challenge 9557。原始 `gs://rxr-data` jsonl/pose traces 本机未落盘
 | 权重缓存 | `/sharedata/NAV/baselines/checkpoints/` | HF 下载落盘 |
 | 评测产物 | `NAV/result/vln_ce/` | 按 method/run_id |
 | 评测日志 | `NAV/log/vln_ce/` | setup 与 eval 日志 |
-| 协议文档 | `NAV/doc/05_evaluation/r2r_ce_sota_reproduction.md` | NAV-EVL-002 |
+| 协议文档 | `NAV/doc/04_evaluation/evaluation_reproduction_and_benchmarks.md` | NAV-EVL-002 |
 
 ### 长视频数据准备区
 
@@ -530,7 +593,7 @@ Argoverse 2 的选择清单位于
 
 Kinetics-400 的 VGGT 相机视角变化统计位于
 `NAV/result/kinetics_vggt_camera_all`，中文说明见
-`NAV/doc/03_data/kinetics_vggt_annotation.md`。
+`NAV/doc/02_data/data_preparation_schema_and_status.md`。
 
 ## NAV 当前派生训练数据
 
@@ -544,7 +607,7 @@ Kinetics-400 的 VGGT 相机视角变化统计位于
 | Spatial并行流水线日志 | `NAV/log/data_prep/spatialvid-short-parallel-20260729` | 7个latent shard、验证与后续A/B训练 |
 | 其他Pose流水线日志 | `NAV/log/data_prep/remaining-pose-20260729` | manifest、latent与验证 |
 
-数据格式和路径的职责边界见 `NAV/doc/03_data/training_data_construction.md`。
+数据格式和路径的职责边界见 `NAV/doc/02_data/data_preparation_schema_and_status.md`。
 
 已下载压缩包的 SHA-256：
 
@@ -595,8 +658,8 @@ e2a81331524a6ca9a987d014a1affcb3b7174240cfae3647532bbaf68ef18404  R2R_VLNCE_v1-3
 | 权重根目录 | `/sharedata/BridgeVLA/data/bridgevla_ckpt` | BridgeVLA++ memoryBench、PaliGemma、CLIP RN50、memoryBench cache 已下载 |
 | 下载脚本：权重 | `NAV/scripts/download_bridgevla_plus_memorybench_ckpt.sh` | 激活环境并下载 `memorybench paligemma clip memorybench_cache` |
 | 下载脚本：数据 | `NAV/scripts/download_bridgevla_plus_memorybench_data.sh` | 官方 HF dataset 下载 + 解压入口；必要时可用 `wget -c` 续缺失 zip |
-| 架构文档 | `NAV/doc/02_architecture/v1_bridgevla_plus_memory_architecture.md` | NAV-ARC-004 |
-| 复现记录 | `NAV/doc/05_evaluation/v1_bridgevla_plus_memorybench_reproduction.md` | NAV-EVL-003 |
+| 架构文档 | `NAV/doc/01_model/model_evolution_and_current_architecture.md` | NAV-ARC-004 |
+| 复现记录 | `NAV/doc/04_evaluation/evaluation_reproduction_and_benchmarks.md` | NAV-EVL-003 |
 | smoke 结果 | `NAV/result/bridgevla_plus_memorybench/smoke_25step/model_160/seed608/result.jsonl` | `put_block_back` 4 variations，4/4 success |
 
 Wan2.1-T2V-1.3B 于 2026-07-23 完成下载验证：
@@ -650,7 +713,7 @@ Detectron2。
 VBench 六项技术指标子集完成评测。正式结果文件为
 `NAV/result/vbench/infiniteworld_prior_runs/metrics/infinite_world_30step_subset/results_2026-07-23-22:15:19_eval_results.json`；
 完整评测方案、命令、分数和可比性限制记录在
-`NAV/doc/05_evaluation/v0_vbench_infinite_world_protocol.md`。
+`NAV/doc/04_evaluation/evaluation_reproduction_and_benchmarks.md`。
 
 同一文档还记录了对原论文 VBench 协议的核对，以及一个 1 场景、2 chunks、
 161 帧的小规模复现。论文同款四项平均分为 `0.842552`，原始结果位于
@@ -660,7 +723,7 @@ VBench 六项技术指标子集完成评测。正式结果文件为
 视频、指标和日志分别位于 `NAV/result/vbench/nav_a_single_2chunks` 和
 `NAV/result/vbench/nav_b_single_2chunks`。InfiniteWorld 对照位于
 `NAV/result/vbench/infiniteworld_single_2chunks`。完整分数、差值和可比性说明
-仍记录在 `NAV/doc/05_evaluation/v0_vbench_infinite_world_protocol.md`。
+仍记录在 `NAV/doc/04_evaluation/evaluation_reproduction_and_benchmarks.md`。
 
 ## 本地参考仓库
 
@@ -740,7 +803,7 @@ NAV/result/vbench/threeway_stats10/
 - 全量标注结果：`NAV/result/kinetics_vggt_camera_all/metrics/`
 - 后台日志：`NAV/result/kinetics_vggt_camera_all/logs/`
 - 启动脚本：`NAV/scripts/run_kinetics_vggt_all.sh`
-- 详细定义：`NAV/doc/03_data/kinetics_vggt_annotation.md`
+- 详细定义：`NAV/doc/02_data/data_preparation_schema_and_status.md`
 
 ### 多数据集训练派生数据
 
@@ -749,7 +812,7 @@ NAV/result/vbench/threeway_stats10/
 - Wan VAE latent：`/sharedata/NAV/derived/latents/<dataset>/`
 - 增量预处理入口：`NAV/scripts/run_incremental_data_prep.sh`
 - 旧 Curriculum 配置与 A/B 训练入口：已从当前代码删除，仅作为历史记录保留
-- 详细说明：`NAV/doc/04_training/v0_multidataset_curriculum.md`
+- 详细说明：`NAV/doc/03_training/training_plan_and_experiment_log.md`
 
 上述目录均为 NAV 派生产物。原始下载目录保持只读；新增数据下载完成后重新运行增量
 预处理入口即可扫描并缓存新增 episode。

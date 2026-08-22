@@ -92,6 +92,7 @@ essay/   论文写作目录；内容必须来自 doc/、code、log/result 已收
 config/  机器可读实验配置。
 scripts/ 可执行入口与评测工具。
 src/     NAV 源代码。
+data/    个人目录下的训练 latent/cache 入口；真实大文件保存在此处但被 Git 忽略。
 log/     原始训练日志、TensorBoard 与 checkpoint。
 result/  生成视频、评测输入输出和汇总指标。
 ```

@@ -74,6 +74,12 @@ stage2 probe sweep: add frozen-backbone layer probes and docs
    terminal observation。当前渲染默认 `post_stop_min_frames=97`、
    `post_stop_pad_frames=12`，用于保证短 episode 也能构造 IW1 history + current
    obs 的 policy window；预算 manifest 必须使用同一口径估算 micro chunks。
+6. 自 2026-08-22 起，训练用 latent 的真实落盘位置改为个人项目目录
+   `NAV/data/train/<dataset>/<latent_run>/`，例如
+   `NAV/data/train/rxr_ce/t4_micro_latents_stoppad_20260822_1423/`。`/sharedata`
+   只保留原始下载数据、simulator assets、预算 manifest 和必要的临时 render
+   中间态；不得再把新的大规模训练 latent 默认写入 `/sharedata/NAV/derived/`。
+   `NAV/data/` 已由 `.gitignore` 忽略，不得提交其中的 `.pt`、PNG 或大 manifest。
 
 `doc/repointro.md` 只是兼容入口，不得重复维护资源内容。
 
