@@ -69,6 +69,11 @@ stage2 probe sweep: add frozen-backbone layer probes and docs
    若出现 OOM，优先降低 worker 数而不是让错误样本继续累计。
 4. 检查命令以 `scripts/check_v1_vae_pack_encode.sh` 或当前 T4 micro latent
    专用检查脚本为准。
+5. Stage3 VLN 数据准备遇到 terminal `STOP` 时必须按吸收态处理：`STOP` 后的
+   action target 填充为 `STOP STOP ...`，后续 RGB frame / latent frame 复制
+   terminal observation。当前渲染默认 `post_stop_min_frames=97`、
+   `post_stop_pad_frames=12`，用于保证短 episode 也能构造 IW1 history + current
+   obs 的 policy window；预算 manifest 必须使用同一口径估算 micro chunks。
 
 `doc/repointro.md` 只是兼容入口，不得重复维护资源内容。
 
