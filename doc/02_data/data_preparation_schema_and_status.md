@@ -74,13 +74,17 @@ chunks / 65.35 GiB latent / 10,819 instruction embeddings`。GPU0 当前已空�
 
 同日对 R2R action sidecar 做训练口径审计：`episode_action_path` 全部存在，
 `n_actions` 与 `gt_actions` 长度一致，且每个 episode 恰好有一个 terminal
-`STOP`。但当前 action JSON 仍是原始轨迹长度，只在末尾包含单个 `STOP`，没有把
-`STOP` 按吸收态重复补齐到 97+ rendered frames。视觉/latent 已做 terminal
-observation padding，因此 **Stage3 训练前必须统一 action STOP-padding 口径**：
-要么重写/派生 padded action sidecar，要么在 Stage3 dataloader 中按
-`render_num_frames` 对 `STOP` 后动作在线补齐；否则当前代码用
-`(start_micro + history_micro) * 12` 取 10-step action horizon 时，大量窗口会
-变成 `action_loss_mask=0`。
+`STOP`。但需要区分两个概念：
+
+1. 视觉/latent 为了保证短 episode 也可取样，会把 terminal observation 复制到
+   97+ frames；这是存储 padding。
+2. Stage3 policy 不应把 stop 后复制出的所有 terminal chunks 都当成新的导航
+   训练窗口。正确做法是按小 chunk history 长度 `K` 连续更新 Register，并只
+   保留非 terminal window，至多额外保留一个包含 terminal `STOP` 的窗口。
+
+因此 Stage3 训练前仍需修正现有 dataloader 的 window sampler：不能把
+Stage1/2 用于对齐 InfiniteWorld 的 `IW1/4/8/16` history span 硬套到 R2R
+policy 监督上；R2R policy 应使用 `history_micro=K` 的小 chunk 更新长度混合。
 
 本轮 R2R 后台任务记录（截至 2026-08-23 已完成；仅保留路径追溯）：
 
@@ -289,14 +293,16 @@ max_abs_lateral_delta = 0.0
 max_abs_forward_delta = 0.25
 ```
 
-### R2R train action 审计（2026-08-23，Stage3 当前口径）
+### R2R train action 审计（2026-08-23，Stage3 小 chunk 口径）
 
 统计口径：读取 R2R train rendered manifest
 `stage3_vln_render_r2r_train_stoppad_gpu0_20260822_1605/episodes/rendered_episodes.jsonl.gz`，
 并按其中的 `episode_action_path` 读取 `gt_actions`；latent micro 数来自
 `NAV/data/train/r2r_ce/t4_micro_latents_stoppad_20260822_1605/manifests/`。
-Stage3 当前 dataloader 的 action label 起点为
-`(start_micro + history_micro) * 12`，`H_action=10`。
+Stage3 action label 起点为 `(start_micro + history_micro) * 12`，
+`H_action=10`。这里的 `history_micro` 对 Stage3 应解释为“小 chunk 更新次数
+K”，而不是 InfiniteWorld-equivalent history span。IW-equivalent span 用于
+视频生成长历史对齐，不是 R2R policy 数据构造的硬约束。
 
 R2R 原始 action 分布：
 
@@ -334,51 +340,40 @@ R2R 原始 action 分布：
 | `TURN_LEFT` | 3 | `trans_id=0, rot_id=3` |
 | `TURN_RIGHT` | 4 | `trans_id=0, rot_id=4` |
 
-按当前 Stage3 window 构造，R2R train 只能支持 IW1 history：
+若错误地把所有 terminal-observation padding chunks 都作为 action CE 样本，
+STOP 会被人为放大。例如 `K=1` 时 STOP ratio 已达 `45.39%`，`K=7` 时达到
+`89.77%`。这不是 R2R 原始动作分布，而是 padding window 被重复采样导致的
+训练偏差。
 
-| IW-equivalent history | history_micro | windows | 有至少 1 个有效 action label | 全 mask windows |
-| --- | ---: | ---: | ---: | ---: |
-| IW1 | 7 | 11,612 | 1,751 | 9,861 |
-| IW4 | 27 | 0 | 0 | 0 |
-| IW8 | 54 | 0 | 0 | 0 |
-| IW16 | 107 | 0 | 0 | 0 |
+推荐的 R2R Stage3 window 构造是：`history_micro=K` 小 chunk history 混合，
+保留所有 non-terminal windows，并且每个 episode 最多保留一个 terminal/STOP
+窗口。该口径下可构造窗口如下：
 
-解释：R2R stoppad 后每条大多只有 8 个 T4 micro chunks，因此 `history_micro=7`
-后只剩 1 个 current obs window；IW4/8/16 的 micro history 长度超过 R2R
-episode latent 长度，不能构造。
+| history_micro K | windows | non-terminal windows | terminal windows | STOP ratio | MOVE_FORWARD ratio | TURN_LEFT ratio | TURN_RIGHT ratio |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 46,760 | 45,845 | 915 | 10.63% | 63.64% | 12.92% | 12.80% |
+| 2 | 35,941 | 35,026 | 915 | 13.83% | 61.59% | 12.25% | 12.33% |
+| 3 | 25,152 | 24,252 | 900 | 18.77% | 58.24% | 11.48% | 11.50% |
+| 4 | 15,356 | 14,636 | 720 | 23.21% | 55.21% | 10.79% | 10.78% |
+| 5 | 8,232 | 7,764 | 468 | 27.13% | 52.35% | 10.26% | 10.26% |
+| 6 | 3,963 | 3,705 | 258 | 30.33% | 49.81% | 10.01% | 9.86% |
+| 7 | 1,751 | 1,607 | 144 | 32.14% | 48.78% | 9.85% | 9.23% |
 
-在“不补齐 STOP，只用当前 action file”的实际代码口径下，IW1 window 的
-10-step label 有效数分布为 mean `1.10`、median `0`、p90 `6`、max `10`；
-有效 label 内部分布为：
-
-| action | count | ratio |
-| --- | ---: | ---: |
-| `STOP` | 898 | 7.03% |
-| `MOVE_FORWARD` | 8,542 | 66.83% |
-| `TURN_LEFT` | 1,724 | 13.49% |
-| `TURN_RIGHT` | 1,617 | 12.65% |
-
-如果按项目规则把 terminal `STOP` 视为吸收态，并把 `STOP` 补齐到
-`render_num_frames`，则所有 IW1 windows 都有完整 10-step label；但 label 会
-高度偏向 STOP：
-
-| action | count | ratio |
-| --- | ---: | ---: |
-| `STOP` | 104,237 | 89.77% |
-| `MOVE_FORWARD` | 8,542 | 7.36% |
-| `TURN_LEFT` | 1,724 | 1.48% |
-| `TURN_RIGHT` | 1,617 | 1.39% |
+合计 `K=1..7` 可产生约 `137,155` 个 R2R policy windows。所有窗口都有完整
+10-step label，因为 terminal `STOP` 只在必要的 terminal window 内按吸收态补齐，
+不会把视觉 padding 段全部重复计入 action supervision。
 
 训练含义：
 
-1. R2R train 已可作为 Stage3 policy 数据源，但默认只用于短 history / IW1；
-   长 history policy 需要 RxR、LHPR 或其它更长导航数据。
-2. Stage3 正式训练前必须修正 action STOP-padding；否则大部分 R2R windows
-   对 CE 没有监督，训练日志里的 `vln_action_valid` 会偏低。
-3. 修正 STOP-padding 后需要采样或 loss reweighting，否则 R2R 的 action label
-   会被 terminal STOP 主导。推荐至少记录 non-terminal / terminal window 比例，
-   并在 Stage3 sampler 中提高含 `MOVE_FORWARD/TURN_LEFT/TURN_RIGHT` 的窗口比例。
-4. R2R 没有 lateral / strafe primitive，仍不支持把 crab-walk 作为默认 policy
+1. R2R train 已可作为 Stage3 policy 数据源；它适合训练小 chunk 连续更新
+   Register 后的 open-loop action prediction。
+2. R2R 的长程性不是通过 IW-equivalent chunk 数表达，而是通过 `K` 次小 chunk
+   Register update 表达。推理时同样是小 chunk 持续更新 Register。
+3. Stage3 dataloader 必须按 non-terminal / terminal-window 规则采样，避免
+   terminal padding 被重复放大成 STOP-heavy 数据集。
+4. 若要训练更长导航 episode 里的更多连续 decision steps，仍需要 RxR、LHPR
+   或其它更长轨迹数据；但这和 IW1/4/8/16 对齐不是同一个问题。
+5. R2R 没有 lateral / strafe primitive，仍不支持把 crab-walk 作为默认 policy
    输出类别。
 
 解释：
