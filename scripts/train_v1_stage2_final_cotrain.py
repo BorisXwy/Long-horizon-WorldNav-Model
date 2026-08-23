@@ -60,6 +60,9 @@ class TrainConfig:
     log_every: int
     seed: int
     checkpoint: str
+    resume_checkpoint: str | None
+    resume_from_step: int
+    resume_optimizer: bool
     output_root: str
     tensorboard_port: int
 
@@ -134,6 +137,58 @@ def save_checkpoint(
     return path
 
 
+def move_optimizer_state_to_device(optimizer: torch.optim.Optimizer, device: torch.device) -> None:
+    """Move restored optimizer buffers onto the active training device."""
+
+    for state in optimizer.state.values():
+        for key, value in list(state.items()):
+            if torch.is_tensor(value):
+                state[key] = value.to(device)
+
+
+def load_training_checkpoint(
+    *,
+    model: FinalStage2WanModel,
+    optimizer: torch.optim.Optimizer | None,
+    checkpoint: Path,
+    device: torch.device,
+    resume_optimizer: bool,
+) -> dict[str, Any]:
+    """Resume an internal NAV checkpoint after the model graph is constructed.
+
+    `--checkpoint` remains the immutable Wan / base init.  This function is for
+    NAV checkpoints saved by `save_checkpoint`, which contain the full V1 model
+    state plus optimizer state.  Keeping the two paths separate prevents an
+    accidental "fake resume" where a NAV checkpoint is interpreted as raw Wan
+    weights.
+    """
+
+    payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"resume checkpoint must be a dict payload: {checkpoint}")
+    model_state = payload.get("model")
+    if model_state is None:
+        raise RuntimeError(f"resume checkpoint has no full model state under key 'model': {checkpoint}")
+    model.load_state_dict(model_state, strict=True)
+    optimizer_loaded = False
+    if optimizer is not None and resume_optimizer:
+        opt_state = payload.get("optimizer")
+        if opt_state is None:
+            raise RuntimeError(f"resume optimizer requested but checkpoint has no optimizer state: {checkpoint}")
+        optimizer.load_state_dict(opt_state)
+        move_optimizer_state_to_device(optimizer, device)
+        optimizer_loaded = True
+    return {
+        "checkpoint": str(checkpoint),
+        "step": int(payload.get("step", 0)),
+        "has_optimizer": payload.get("optimizer") is not None,
+        "optimizer_loaded": optimizer_loaded,
+        "train_config": payload.get("train_config"),
+        "model_config": payload.get("model_config"),
+        "data_config": payload.get("data_config"),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-name", default=f"stage2_final_cotrain_{time.strftime('%Y%m%d_%H%M%S')}")
@@ -152,6 +207,8 @@ def main() -> None:
     parser.add_argument("--log-every", type=int, default=1)
     parser.add_argument("--seed", type=int, default=20260818)
     parser.add_argument("--checkpoint", type=Path, default=WAN_DEFAULT)
+    parser.add_argument("--resume-checkpoint", type=Path, default=None)
+    parser.add_argument("--no-resume-optimizer", action="store_true")
     parser.add_argument("--output-root", type=Path, default=ROOT / "log" / "v1_stage2_final_cotrain")
     parser.add_argument("--tensorboard-port", type=int, default=6017)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
@@ -194,6 +251,9 @@ def main() -> None:
         log_every=args.log_every,
         seed=args.seed,
         checkpoint=str(args.checkpoint),
+        resume_checkpoint=str(args.resume_checkpoint) if args.resume_checkpoint else None,
+        resume_from_step=0,
+        resume_optimizer=not args.no_resume_optimizer,
         output_root=str(args.output_root),
         tensorboard_port=args.tensorboard_port,
     )
@@ -265,11 +325,29 @@ def main() -> None:
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     writer = SummaryWriter(str(run_dir / "tensorboard"))
     log_path = run_dir / "train.jsonl"
+    resume_audit: dict[str, Any] | None = None
+    resume_from_step = 0
+    if args.resume_checkpoint is not None:
+        resume_audit = load_training_checkpoint(
+            model=model,
+            optimizer=optimizer,
+            checkpoint=args.resume_checkpoint,
+            device=device,
+            resume_optimizer=not args.no_resume_optimizer,
+        )
+        resume_from_step = int(resume_audit["step"])
+        train_cfg.resume_from_step = resume_from_step
+        preflight["train_config"] = asdict(train_cfg)
+        preflight["resume_audit"] = resume_audit
+        write_json(run_dir / "resume_audit.json", resume_audit)
+        write_json(run_dir / "formal_preflight.json", preflight)
+        write_json(run_dir / "config.json", {"train": asdict(train_cfg), "data": data_cfg.to_dict(), "model": model_cfg.to_dict()})
     with log_path.open("a") as log:
         log.write(json.dumps({"event": "start", "time": now(), "run_dir": str(run_dir), **preflight}, ensure_ascii=False) + "\n")
         last = time.time()
         global_start = time.time()
-        for step in range(1, args.steps + 1):
+        for local_step in range(1, args.steps + 1):
+            step = resume_from_step + local_step
             optimizer.zero_grad(set_to_none=True)
             metric_sum: dict[str, float] = {}
             meta_last: dict[str, Any] = {}
@@ -289,12 +367,14 @@ def main() -> None:
             optimizer.step()
             if device.type == "cuda":
                 torch.cuda.synchronize(device)
-            if step % args.log_every == 0 or step == 1:
+            if local_step % args.log_every == 0 or local_step == 1:
                 now_time = time.time()
                 record = {
                     "event": "train",
                     "time": now(),
                     "step": step,
+                    "local_step": local_step,
+                    "resume_from_step": resume_from_step,
                     "seconds_per_step_window": (now_time - last) / max(args.log_every, 1),
                     "seconds_total": now_time - global_start,
                     "lr": optimizer.param_groups[0]["lr"],
@@ -314,7 +394,7 @@ def main() -> None:
                 for key, value in record.items():
                     if isinstance(value, (int, float)):
                         writer.add_scalar(key, value, step)
-            if step % args.save_every == 0 or step == args.steps:
+            if local_step % args.save_every == 0 or local_step == args.steps:
                 ckpt = save_checkpoint(
                     model=model,
                     optimizer=optimizer,
