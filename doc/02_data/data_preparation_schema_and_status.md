@@ -5,7 +5,7 @@
 | 文档 ID | `NAV-DAT-010` |
 | 类型 | 数据准备、Schema 与状态总览 |
 | 状态 | Live / Source of Truth |
-| 更新时间 | 2026-08-22 |
+| 更新时间 | 2026-08-23 |
 | 职责 | 集中维护数据集调研、下载/预处理状态、T4 latent/window 构建、pose/action 标注、VLN 渲染和资源配比。 |
 
 ## 当前入口结论
@@ -53,14 +53,43 @@ stoppad 后台 renderer/encoder，保留已生成的 RxR latent 不删除；新�
 embedding watcher 已挂起，等待 R2R latent encoder 全部退出后自动缓存到
 `NAV/data/train/r2r_ce/text_embeddings_stoppad_20260822_1605/`。
 
-当前后台任务：
+2026-08-23 更新：R2R train 三块训练产物已完成：
+
+```text
+rendered obs:
+  /sharedata/NAV/derived/v1/vln/rendered_obs/
+    stage3_vln_render_r2r_train_stoppad_gpu0_20260822_1605/
+
+T4 micro latent:
+  NAV/data/train/r2r_ce/t4_micro_latents_stoppad_20260822_1605/
+
+instruction/text embedding:
+  NAV/data/train/r2r_ce/text_embeddings_stoppad_20260822_1605/
+```
+
+完成规模为 `10,819 episodes / 1,063,870 rendered frames / 87,345 T4 micro
+chunks / 65.35 GiB latent / 10,819 instruction embeddings`。GPU0 当前已空闲；
+保留的 `nav_v1_stage3_vln_render_r2r_train_guard` 只是 CPU 磁盘守护窗口，不代表
+仍在占卡渲染或编码。
+
+同日对 R2R action sidecar 做训练口径审计：`episode_action_path` 全部存在，
+`n_actions` 与 `gt_actions` 长度一致，且每个 episode 恰好有一个 terminal
+`STOP`。但当前 action JSON 仍是原始轨迹长度，只在末尾包含单个 `STOP`，没有把
+`STOP` 按吸收态重复补齐到 97+ rendered frames。视觉/latent 已做 terminal
+observation padding，因此 **Stage3 训练前必须统一 action STOP-padding 口径**：
+要么重写/派生 padded action sidecar，要么在 Stage3 dataloader 中按
+`render_num_frames` 对 `STOP` 后动作在线补齐；否则当前代码用
+`(start_micro + history_micro) * 12` 取 10-step action horizon 时，大量窗口会
+变成 `action_loss_mask=0`。
+
+本轮 R2R 后台任务记录（截至 2026-08-23 已完成；仅保留路径追溯）：
 
 | tmux | GPU | 任务 | 输出 / 日志 |
 | --- | ---: | --- | --- |
-| `nav_v1_stage3_vln_render_r2r_train_gpu0` | 0 | 优先渲染 R2R train 全量；terminal STOP 后复制 terminal observation 到可构造 policy window | `/sharedata/NAV/derived/v1/vln/rendered_obs/stage3_vln_render_r2r_train_stoppad_gpu0_20260822_1605/`；`log/v1_data_prep/stage3_vln_render_r2r_train_stoppad_gpu0_20260822_1605.log` |
-| `nav_v1_stage3_vln_encode_r2r_train_gpu0_s0..s5` | 0 | 6 路 hash-sharded stream encoder 监听 R2R train render manifest，在线编码 V1 `T_latent=4` micro latent，并在校验后删除 PNG；`num_shards=6`、`shard_index=0..5` | `NAV/data/train/r2r_ce/t4_micro_latents_stoppad_20260822_1605/`；`log/v1_data_prep/stage3_vln_t4_stream_r2r_train_stoppad_navdata_gpu0_shard*_of6_20260822_1605.log` |
-| `nav_v1_stage3_vln_text_r2r_train_after_latent` | 0（latent 结束后） | 等待 R2R latent encoder 结束后，顺序缓存 R2R instruction UMT5 embedding | `NAV/data/train/r2r_ce/text_embeddings_stoppad_20260822_1605/`；`log/v1_data_prep/stage3_vln_text_r2r_train_stoppad_after_latent_20260822_1605.log` |
-| `nav_v1_stage3_vln_render_r2r_train_guard` | CPU | 监控 `/sharedata`，若 free `<400GiB` 自动停止 render，让 encoder/cleanup 追空间 | `log/v1_data_prep/vln_render_disk_guard_r2r_train_stoppad_20260822_1605.log` |
+| `nav_v1_stage3_vln_render_r2r_train_gpu0` | 0 | 已完成：R2R train 全量渲染；terminal STOP 后复制 terminal observation 到可构造 policy window | `/sharedata/NAV/derived/v1/vln/rendered_obs/stage3_vln_render_r2r_train_stoppad_gpu0_20260822_1605/`；`log/v1_data_prep/stage3_vln_render_r2r_train_stoppad_gpu0_20260822_1605.log` |
+| `nav_v1_stage3_vln_encode_r2r_train_gpu0_s0..s5` | 0 | 已完成：6 路 hash-sharded stream encoder 编码 V1 `T_latent=4` micro latent，并在校验后删除 PNG | `NAV/data/train/r2r_ce/t4_micro_latents_stoppad_20260822_1605/`；`log/v1_data_prep/stage3_vln_t4_stream_r2r_train_stoppad_navdata_gpu0_shard*_of6_20260822_1605.log` |
+| `nav_v1_stage3_vln_text_r2r_train_after_latent` | 0 | 已完成：R2R instruction UMT5 embedding，共 10,819 个 `.pt` | `NAV/data/train/r2r_ce/text_embeddings_stoppad_20260822_1605/`；实际完成日志 `log/v1_data_prep/stage3_vln_text_r2r_train_stoppad_direct_20260823_1810.log` |
+| `nav_v1_stage3_vln_render_r2r_train_guard` | CPU | 可保留/可关闭：磁盘守护窗口；当前不占 GPU | `log/v1_data_prep/vln_render_disk_guard_r2r_train_stoppad_20260822_1605.log` |
 
 已暂停但保留结果的 RxR 任务：
 
@@ -259,6 +288,98 @@ lateral_step_ratio = 0.0000%
 max_abs_lateral_delta = 0.0
 max_abs_forward_delta = 0.25
 ```
+
+### R2R train action 审计（2026-08-23，Stage3 当前口径）
+
+统计口径：读取 R2R train rendered manifest
+`stage3_vln_render_r2r_train_stoppad_gpu0_20260822_1605/episodes/rendered_episodes.jsonl.gz`，
+并按其中的 `episode_action_path` 读取 `gt_actions`；latent micro 数来自
+`NAV/data/train/r2r_ce/t4_micro_latents_stoppad_20260822_1605/manifests/`。
+Stage3 当前 dataloader 的 action label 起点为
+`(start_micro + history_micro) * 12`，`H_action=10`。
+
+R2R 原始 action 分布：
+
+| 指标 | 数值 |
+| --- | ---: |
+| episodes | 10,819 |
+| scenes | 61 |
+| missing action sidecar | 0 |
+| `n_actions` mismatch | 0 |
+| rendered frames mean / median | 98.33 / 97 |
+| T4 micro chunks mean / median | 8.07 / 8 |
+| action length mean / median | 58.35 / 56 |
+| instruction words mean / median | 26.65 / 25 |
+| terminal `STOP` episodes | 10,819 / 10,819 |
+| multi-STOP episodes | 0 |
+| non-zero after first STOP | 0 |
+| first STOP index mean / median | 57.35 / 55 |
+| rendered frames - action length mean / median | 39.99 / 41 |
+
+原始 `gt_actions` 类别分布：
+
+| 原始 action | count | ratio |
+| --- | ---: | ---: |
+| `STOP` | 10,819 | 1.71% |
+| `MOVE_FORWARD` | 404,912 | 64.15% |
+| `TURN_LEFT` | 111,177 | 17.61% |
+| `TURN_RIGHT` | 104,336 | 16.53% |
+
+当前正式 combo 映射：
+
+| VLN action | combo_id | 含义 |
+| --- | ---: | --- |
+| `STOP` | 120 | `trans_id=10, rot_id=0` |
+| `MOVE_FORWARD` | 12 | `trans_id=1, rot_id=0` |
+| `TURN_LEFT` | 3 | `trans_id=0, rot_id=3` |
+| `TURN_RIGHT` | 4 | `trans_id=0, rot_id=4` |
+
+按当前 Stage3 window 构造，R2R train 只能支持 IW1 history：
+
+| IW-equivalent history | history_micro | windows | 有至少 1 个有效 action label | 全 mask windows |
+| --- | ---: | ---: | ---: | ---: |
+| IW1 | 7 | 11,612 | 1,751 | 9,861 |
+| IW4 | 27 | 0 | 0 | 0 |
+| IW8 | 54 | 0 | 0 | 0 |
+| IW16 | 107 | 0 | 0 | 0 |
+
+解释：R2R stoppad 后每条大多只有 8 个 T4 micro chunks，因此 `history_micro=7`
+后只剩 1 个 current obs window；IW4/8/16 的 micro history 长度超过 R2R
+episode latent 长度，不能构造。
+
+在“不补齐 STOP，只用当前 action file”的实际代码口径下，IW1 window 的
+10-step label 有效数分布为 mean `1.10`、median `0`、p90 `6`、max `10`；
+有效 label 内部分布为：
+
+| action | count | ratio |
+| --- | ---: | ---: |
+| `STOP` | 898 | 7.03% |
+| `MOVE_FORWARD` | 8,542 | 66.83% |
+| `TURN_LEFT` | 1,724 | 13.49% |
+| `TURN_RIGHT` | 1,617 | 12.65% |
+
+如果按项目规则把 terminal `STOP` 视为吸收态，并把 `STOP` 补齐到
+`render_num_frames`，则所有 IW1 windows 都有完整 10-step label；但 label 会
+高度偏向 STOP：
+
+| action | count | ratio |
+| --- | ---: | ---: |
+| `STOP` | 104,237 | 89.77% |
+| `MOVE_FORWARD` | 8,542 | 7.36% |
+| `TURN_LEFT` | 1,724 | 1.48% |
+| `TURN_RIGHT` | 1,617 | 1.39% |
+
+训练含义：
+
+1. R2R train 已可作为 Stage3 policy 数据源，但默认只用于短 history / IW1；
+   长 history policy 需要 RxR、LHPR 或其它更长导航数据。
+2. Stage3 正式训练前必须修正 action STOP-padding；否则大部分 R2R windows
+   对 CE 没有监督，训练日志里的 `vln_action_valid` 会偏低。
+3. 修正 STOP-padding 后需要采样或 loss reweighting，否则 R2R 的 action label
+   会被 terminal STOP 主导。推荐至少记录 non-terminal / terminal window 比例，
+   并在 Stage3 sampler 中提高含 `MOVE_FORWARD/TURN_LEFT/TURN_RIGHT` 的窗口比例。
+4. R2R 没有 lateral / strafe primitive，仍不支持把 crab-walk 作为默认 policy
+   输出类别。
 
 解释：
 
