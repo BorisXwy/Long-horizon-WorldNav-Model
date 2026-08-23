@@ -359,9 +359,13 @@ STOP 会被人为放大。例如 `K=1` 时 STOP ratio 已达 `45.39%`，`K=7` �
 | 6 | 3,963 | 3,705 | 258 | 30.33% | 49.81% | 10.01% | 9.86% |
 | 7 | 1,751 | 1,607 | 144 | 32.14% | 48.78% | 9.85% | 9.23% |
 
-合计 `K=1..7` 可产生约 `137,155` 个 R2R policy windows。所有窗口都有完整
-10-step label，因为 terminal `STOP` 只在必要的 terminal window 内按吸收态补齐，
-不会把视觉 padding 段全部重复计入 action supervision。
+按更严格的最终实现口径（`target action` 必须在 `Z_obs` 覆盖的可见 chunk 之后，
+且全体 `K=1..7` 混合时每个 episode 最多保留一个 terminal action chunk），
+可构造 `69,648` 个 R2R policy windows：其中 `60,641` 个 non-terminal windows，
+`9,007` 个 terminal windows。标签分布为 `MOVE_FORWARD 65.78%`、
+`TURN_LEFT 13.56%`、`TURN_RIGHT 13.53%`、`STOP 7.14%`。这里少于上表逐 K
+相加的数量，是因为逐 K 统计会让同一 episode 在不同 K 下重复贡献 terminal
+窗口；最终 dataloader 采用全局 one-terminal-window-per-episode 规则。
 
 训练含义：
 
@@ -375,6 +379,29 @@ STOP 会被人为放大。例如 `K=1` 时 STOP ratio 已达 `45.39%`，`K=7` �
    或其它更长轨迹数据；但这和 IW1/4/8/16 对齐不是同一个问题。
 5. R2R 没有 lateral / strafe primitive，仍不支持把 crab-walk 作为默认 policy
    输出类别。
+
+当前实现入口：
+
+```text
+dataloader:
+  NAV/src/nav/v1/stage3_r2r.py
+  R2RStage3PolicyBatchBuilder
+
+training:
+  NAV/scripts/train_v1_stage3_r2r_future_action.py
+```
+
+实现规则：
+
+```text
+history_latents = C_start ... C_{start+K-1}
+a_hist_combo    = 每个历史 chunk 之后已经执行过的 action chunk
+z_obs           = C_{start+K}
+action_combo    = z_obs 覆盖的最后一帧之后的未来 10 个 action
+
+label_start = obs_micro * FINAL_MICRO_STRIDE + (FINAL_MICRO_FRAMES - 1)
+            = obs_micro * 12 + 12
+```
 
 解释：
 
