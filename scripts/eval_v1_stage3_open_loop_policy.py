@@ -305,6 +305,12 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=20260824)
     parser.add_argument("--action-noise-mode", choices=("random", "zero", "both"), default="both")
     parser.add_argument(
+        "--evaluation-action-oversample-mode",
+        choices=("none", "copy_rare_actions"),
+        default="none",
+        help="Use the unique natural R2R window pool for reported accuracy by default.",
+    )
+    parser.add_argument(
         "--instruction-mode",
         choices=("correct", "shuffled", "empty", "all"),
         default="correct",
@@ -336,6 +342,7 @@ def main() -> None:
     r2r_cfg = make_dataclass(R2RStage3DataConfig, source["r2r_data_config"])
     r2r_cfg.batch_size = args.batch_size
     r2r_cfg.seed = args.seed
+    r2r_cfg.action_oversample_mode = args.evaluation_action_oversample_mode
     if args.history_micro_choices:
         r2r_cfg.history_micro_choices = args.history_micro_choices
     if args.max_r2r_episodes > 0:
@@ -377,6 +384,7 @@ def main() -> None:
         "history_micro_choices": r2r_cfg.history_micro_choices,
         "instruction_modes": instruction_modes,
         "action_noise_modes": action_modes,
+        "evaluation_action_oversample_mode": r2r_cfg.action_oversample_mode,
         "dataset_split": "R2R train teacher-forced observations",
         "dataset_summary": dataset_summary,
         "modes": {},

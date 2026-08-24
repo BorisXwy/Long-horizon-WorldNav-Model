@@ -70,6 +70,10 @@ class R2RStage3DataConfig:
     require_text_cache: bool = True
     max_episodes: int = 0
     terminal_window_policy: str = "one_per_episode"
+    action_oversample_mode: str = "none"
+    turn_copy_bonus: int = 2
+    stop_copy_bonus: int = 2
+    max_copy_factor: int = 10
     seed: int = 20260823
 
     def to_dict(self) -> dict[str, Any]:
@@ -136,6 +140,10 @@ class R2RStage3PolicyBatchBuilder:
             raise ValueError("R2R Stage3 currently expects history_micro >= 1; K=0 start samples are handled separately later")
         if cfg.terminal_window_policy != "one_per_episode":
             raise ValueError("only terminal_window_policy='one_per_episode' is currently supported")
+        if cfg.action_oversample_mode not in {"none", "copy_rare_actions"}:
+            raise ValueError(f"unknown action_oversample_mode={cfg.action_oversample_mode!r}")
+        if cfg.turn_copy_bonus < 0 or cfg.stop_copy_bonus < 0 or cfg.max_copy_factor < 1:
+            raise ValueError("action copy bonuses must be non-negative and max_copy_factor must be >= 1")
 
         empty = torch.load(cfg.text_empty, map_location="cpu", weights_only=False)
         self.empty_y = empty["y"].to(torch.bfloat16)
@@ -151,11 +159,26 @@ class R2RStage3PolicyBatchBuilder:
         self.windows_by_k: dict[int, list[R2RPolicyWindow]] = {k: [] for k in self.history_choices}
         self.windows: list[R2RPolicyWindow] = []
         self._build_windows()
-        for values in self.windows_by_k.values():
-            self.rng.shuffle(values)
-        self.cursors = {k: 0 for k in self.history_choices}
         if not self.windows:
             raise RuntimeError("no R2R Stage3 policy windows constructed")
+        self.policy_combos = tuple(vln_action_to_combo(action_id) for action_id in ACTION_NAMES)
+        self.raw_action_label_counts: Counter[int] = Counter()
+        self.sampled_action_label_counts: Counter[int] = Counter()
+        self.raw_action_label_counts_by_k: dict[int, Counter[int]] = {
+            k: Counter() for k in self.history_choices
+        }
+        self.sampled_action_label_counts_by_k: dict[int, Counter[int]] = {
+            k: Counter() for k in self.history_choices
+        }
+        self.copy_factor_counts: Counter[int] = Counter()
+        self.window_copy_factors: dict[int, int] = {}
+        self.sample_windows_by_k: dict[int, list[R2RPolicyWindow]] = {
+            k: [] for k in self.history_choices
+        }
+        self._build_oversampled_windows()
+        for values in self.sample_windows_by_k.values():
+            self.rng.shuffle(values)
+        self.cursors = {k: 0 for k in self.history_choices}
 
     @staticmethod
     def _load_render_rows(path: Path) -> dict[str, dict[str, Any]]:
@@ -209,6 +232,7 @@ class R2RStage3PolicyBatchBuilder:
             if not action_path.is_file():
                 continue
             actions = self._read_actions(action_path)
+            self.action_cache[sample_id] = actions
             stop_index = self._first_stop(actions)
             if stop_index is None:
                 continue
@@ -253,6 +277,65 @@ class R2RStage3PolicyBatchBuilder:
     def _add_window(self, window: R2RPolicyWindow) -> None:
         self.windows.append(window)
         self.windows_by_k[window.history_micro].append(window)
+
+    def _build_oversampled_windows(self) -> None:
+        """Build an in-memory copied window pool with ordinary CE semantics.
+
+        The latent payload is never duplicated on disk.  Only references to a
+        real window are repeated.  Windows with more TURN/STOP tokens receive
+        more copies, capped to avoid a small set dominating the training run.
+        """
+
+        stop_combo = vln_action_to_combo(STOP_ACTION)
+        turn_combos = {
+            vln_action_to_combo(TURN_LEFT_ACTION),
+            vln_action_to_combo(TURN_RIGHT_ACTION),
+        }
+        for window in self.windows:
+            actions = self.action_cache[window.sample_id]
+            target = self._action_window(actions, window.label_start_action)
+            target_values = [int(value) for value in target.tolist()]
+            present = set(target_values)
+            unsupported = present.difference(self.policy_combos)
+            if unsupported:
+                raise RuntimeError(
+                    f"R2R window produced unsupported action combos={sorted(unsupported)} "
+                    f"sample={window.sample_id}"
+                )
+            self.raw_action_label_counts.update(target_values)
+            self.raw_action_label_counts_by_k[window.history_micro].update(target_values)
+            if self.cfg.action_oversample_mode == "none":
+                copy_factor = 1
+            else:
+                turn_count = sum(value in turn_combos for value in target_values)
+                stop_count = sum(value == stop_combo for value in target_values)
+                copy_factor = min(
+                    int(self.cfg.max_copy_factor),
+                    1
+                    + int(self.cfg.turn_copy_bonus) * turn_count
+                    + int(self.cfg.stop_copy_bonus) * stop_count,
+                )
+            self.window_copy_factors[id(window)] = copy_factor
+            self.copy_factor_counts[copy_factor] += 1
+            self.sample_windows_by_k[window.history_micro].extend([window] * copy_factor)
+            self.sampled_action_label_counts.update(
+                {combo: count * copy_factor for combo, count in Counter(target_values).items()}
+            )
+            self.sampled_action_label_counts_by_k[window.history_micro].update(
+                {combo: count * copy_factor for combo, count in Counter(target_values).items()}
+            )
+
+    def _history_uniform_action_ratio(
+        self,
+        counts_by_k: dict[int, Counter[int]],
+    ) -> dict[int, float]:
+        available = [counts for counts in counts_by_k.values() if sum(counts.values()) > 0]
+        ratio = {combo: 0.0 for combo in self.policy_combos}
+        for counts in available:
+            total = float(sum(counts.values()))
+            for combo in self.policy_combos:
+                ratio[combo] += float(counts.get(combo, 0)) / total / float(len(available))
+        return ratio
 
     def _payload(self, path: Path) -> dict[str, Any]:
         key = str(path)
@@ -313,11 +396,11 @@ class R2RStage3PolicyBatchBuilder:
         return value
 
     def _choose_k(self) -> int:
-        available = [k for k, values in self.windows_by_k.items() if values]
+        available = [k for k, values in self.sample_windows_by_k.items() if values]
         return self.rng.choice(available)
 
     def _choose_window(self, history_micro: int) -> R2RPolicyWindow:
-        values = self.windows_by_k[history_micro]
+        values = self.sample_windows_by_k[history_micro]
         cursor = self.cursors[history_micro]
         if cursor >= len(values):
             self.rng.shuffle(values)
@@ -354,7 +437,8 @@ class R2RStage3PolicyBatchBuilder:
                 hist_start = micro_index * FINAL_MICRO_STRIDE + (FINAL_MICRO_FRAMES - 1)
                 hist_rows.append(self._action_window(actions, hist_start))
             a_hist.append(torch.stack(hist_rows, dim=0))
-            action_combo.append(self._action_window(actions, item.label_start_action))
+            target_combo = self._action_window(actions, item.label_start_action)
+            action_combo.append(target_combo)
             action_masks.append(torch.ones(self.cfg.action_horizon, dtype=torch.float32))
             y, y_mask, source = self._text(item.dataset, item.sample_id)
             ys.append(y)
@@ -386,6 +470,7 @@ class R2RStage3PolicyBatchBuilder:
             "history_micro": history_micro,
             "sample_ids": sample_ids,
             "label_start_actions": label_start_actions,
+            "copy_factors": [self.window_copy_factors[id(item)] for item in items],
             "terminal_count": terminal_count,
             "action_valid": float(batch["action_loss_mask"].sum().detach().cpu().item()),
             "text_hits": self.text_hits,
@@ -395,19 +480,15 @@ class R2RStage3PolicyBatchBuilder:
         return batch, meta
 
     def summary(self) -> dict[str, Any]:
-        label_counts: Counter[int] = Counter()
         terminal = 0
         by_k = {k: len(values) for k, values in self.windows_by_k.items()}
+        sampled_by_k = {k: len(values) for k, values in self.sample_windows_by_k.items()}
         for window in self.windows:
             terminal += int(window.is_terminal)
-            actions = self.action_cache.get(window.sample_id)
-            if actions is None:
-                render = self.render_rows.get(window.sample_id, {})
-                action_path = Path(str(render.get("episode_action_path", "")))
-                actions = self._read_actions(action_path)
-                self.action_cache[window.sample_id] = actions
-            label_counts.update(int(x) for x in self._action_window(actions, window.label_start_action).tolist())
+        label_counts = self.raw_action_label_counts
         total_labels = sum(label_counts.values())
+        natural_expected_ratio = self._history_uniform_action_ratio(self.raw_action_label_counts_by_k)
+        oversampled_expected_ratio = self._history_uniform_action_ratio(self.sampled_action_label_counts_by_k)
         return {
             "episodes_encoded": len(self.encoded_rows),
             "episodes_rendered": len(self.render_rows),
@@ -418,9 +499,35 @@ class R2RStage3PolicyBatchBuilder:
             "history_micro_choices": self.history_choices,
             "label_rule": "label_start = obs_micro * FINAL_MICRO_STRIDE + (FINAL_MICRO_FRAMES - 1)",
             "target_semantics": "one future action chunk after Z_obs; repeated terminal padding chunks are not sampled",
+            "action_oversample": {
+                "mode": self.cfg.action_oversample_mode,
+                "turn_copy_bonus": self.cfg.turn_copy_bonus,
+                "stop_copy_bonus": self.cfg.stop_copy_bonus,
+                "max_copy_factor": self.cfg.max_copy_factor,
+                "virtual_windows": sum(sampled_by_k.values()),
+                "virtual_windows_by_history_micro": sampled_by_k,
+                "copy_factor_counts": {str(k): int(v) for k, v in sorted(self.copy_factor_counts.items())},
+            },
             "action_label_counts": {combo_to_name(k): int(v) for k, v in sorted(label_counts.items())},
             "action_label_ratio": {
                 combo_to_name(k): (float(v) / float(total_labels) if total_labels else 0.0)
                 for k, v in sorted(label_counts.items())
+            },
+            "natural_history_uniform_action_ratio": {
+                combo_to_name(k): v for k, v in natural_expected_ratio.items()
+            },
+            "oversampled_action_label_counts": {
+                combo_to_name(k): int(v) for k, v in sorted(self.sampled_action_label_counts.items())
+            },
+            "oversampled_action_label_ratio": {
+                combo_to_name(k): (
+                    float(v) / float(sum(self.sampled_action_label_counts.values()))
+                    if self.sampled_action_label_counts
+                    else 0.0
+                )
+                for k, v in sorted(self.sampled_action_label_counts.items())
+            },
+            "oversampled_history_uniform_action_ratio": {
+                combo_to_name(k): v for k, v in oversampled_expected_ratio.items()
             },
         }

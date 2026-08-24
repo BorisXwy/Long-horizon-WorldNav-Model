@@ -10,6 +10,7 @@ after ``Z_obs``; repeated terminal padding chunks are not sampled as repeated
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from dataclasses import asdict, dataclass, fields
 import json
 import os
@@ -27,10 +28,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from nav.v1.stage2_final import FinalStage2BatchBuilder, FinalStage2DataConfig, FinalStage2WanConfig, FinalStage2WanModel  # noqa: E402
-from nav.v1.stage3_r2r import R2RStage3DataConfig, R2RStage3PolicyBatchBuilder  # noqa: E402
+from nav.v1.stage3_r2r import R2RStage3DataConfig, R2RStage3PolicyBatchBuilder, combo_to_name  # noqa: E402
 
 
-DEFAULT_STAGE2_CHECKPOINT = ROOT / "log/v1_stage2_final_cotrain/stage2_final_from_wan_probe_l16_fullmix_2k_20260822_001/checkpoints/step_001600.pt"
+DEFAULT_STAGE2_CHECKPOINT = ROOT / "log/v1_stage2_final_cotrain/stage2_from_step1600_continue_fullmix_1k_20260823/checkpoints/step_002600.pt"
 DEFAULT_R2R_DATA_CONFIG = R2RStage3DataConfig()
 
 
@@ -49,6 +50,10 @@ class TrainConfig:
     lambda_ce: float
     lambda_video_replay: float
     lambda_pose_replay: float
+    action_oversample_mode: str
+    turn_copy_bonus: int
+    stop_copy_bonus: int
+    max_copy_factor: int
     dtype: str
     save_every: int
     log_every: int
@@ -164,6 +169,14 @@ def main() -> None:
     parser.add_argument("--lambda-ce", type=float, default=1.0)
     parser.add_argument("--lambda-video-replay", type=float, default=0.25)
     parser.add_argument("--lambda-pose-replay", type=float, default=0.05)
+    parser.add_argument(
+        "--action-oversample-mode",
+        choices=("none", "copy_rare_actions"),
+        default="copy_rare_actions",
+    )
+    parser.add_argument("--turn-copy-bonus", type=int, default=2)
+    parser.add_argument("--stop-copy-bonus", type=int, default=2)
+    parser.add_argument("--max-copy-factor", type=int, default=10)
     parser.add_argument("--dtype", choices=("bf16", "fp16", "fp32"), default="bf16")
     parser.add_argument("--save-every", type=int, default=200)
     parser.add_argument("--log-every", type=int, default=1)
@@ -207,6 +220,10 @@ def main() -> None:
         batch_size=args.batch_size,
         require_text_cache=not args.allow_empty_text_fallback,
         max_episodes=args.max_r2r_episodes,
+        action_oversample_mode=args.action_oversample_mode,
+        turn_copy_bonus=args.turn_copy_bonus,
+        stop_copy_bonus=args.stop_copy_bonus,
+        max_copy_factor=args.max_copy_factor,
         seed=args.seed,
     )
     r2r_builder = R2RStage3PolicyBatchBuilder(r2r_data_cfg)
@@ -225,6 +242,10 @@ def main() -> None:
         lambda_ce=args.lambda_ce,
         lambda_video_replay=args.lambda_video_replay,
         lambda_pose_replay=args.lambda_pose_replay,
+        action_oversample_mode=args.action_oversample_mode,
+        turn_copy_bonus=args.turn_copy_bonus,
+        stop_copy_bonus=args.stop_copy_bonus,
+        max_copy_factor=args.max_copy_factor,
         dtype=args.dtype,
         save_every=args.save_every,
         log_every=args.log_every,
@@ -246,6 +267,11 @@ def main() -> None:
             "z_obs": "current observed T4 micro chunk",
             "target_action": "one future action chunk after z_obs; label_start=obs_micro*12+12",
             "terminal": "one terminal STOP action chunk per episode at most; repeated terminal visual padding is not sampled",
+        },
+        "action_balance": {
+            "sampling": "copy real windows in the dataloader pool according to TURN/STOP token counts",
+            "copy_factor": "min(max_copy_factor, 1 + turn_copy_bonus * n_turn + stop_copy_bonus * n_stop)",
+            "token_loss": "ordinary unweighted combo cross-entropy",
         },
         "loss": "L = lambda_ce * CE(combo_logits, action_combo) + lambda_video_replay * L_visual_replay + lambda_pose_replay * L_pose_replay",
     }
@@ -273,6 +299,7 @@ def main() -> None:
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     writer = SummaryWriter(str(run_dir / "tensorboard"))
     log_path = run_dir / "train.jsonl"
+    sampled_target_counts: Counter[int] = Counter()
     with log_path.open("a") as log:
         log.write(json.dumps({"event": "start", "time": now(), "run_dir": str(run_dir), **preflight}, ensure_ascii=False) + "\n")
         last = time.time()
@@ -292,6 +319,9 @@ def main() -> None:
                 metrics["loss_policy"] = metrics.get("loss_policy", 0.0) + float(out["loss"].detach().float().cpu().item()) / args.grad_accum
                 metrics["loss_ce_aux"] = metrics.get("loss_ce_aux", 0.0) + float(out["loss_ce_aux"].detach().float().cpu().item()) / args.grad_accum
                 metrics["loss_action_flow"] = metrics.get("loss_action_flow", 0.0) + float(out["loss_action_flow"].detach().float().cpu().item()) / args.grad_accum
+                sampled_target_counts.update(
+                    int(value) for value in r2r_batch["action_combo"].detach().cpu().reshape(-1).tolist()
+                )
                 r2r_meta_last = r2r_meta
 
                 replay_batch, replay_meta = replay_builder.next_batch(device=device, dtype=dtype)
@@ -326,10 +356,14 @@ def main() -> None:
                     "r2r_action_valid": r2r_meta_last.get("action_valid"),
                     "r2r_text_hits": r2r_meta_last.get("text_hits"),
                     "r2r_text_fallbacks": r2r_meta_last.get("text_fallbacks"),
+                    "r2r_copy_factors": r2r_meta_last.get("copy_factors"),
                     "replay_history_iw": replay_meta_last.get("history_iw"),
                     "replay_datasets": replay_meta_last.get("datasets"),
                     **{f"train/{key}": value for key, value in metrics.items()},
                 }
+                sampled_target_total = float(sum(sampled_target_counts.values()))
+                for combo, count in sorted(sampled_target_counts.items()):
+                    record[f"train/action_target_ratio_{combo_to_name(combo)}"] = float(count) / max(sampled_target_total, 1.0)
                 if device.type == "cuda":
                     record["cuda_max_memory_gb"] = torch.cuda.max_memory_allocated(device) / (1024**3)
                 log.write(json.dumps(record, ensure_ascii=False) + "\n")

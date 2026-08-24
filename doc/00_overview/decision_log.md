@@ -5,7 +5,7 @@
 | 文档 ID | `NAV-OVR-002` |
 | 类型 | 决策日志（Decision Log） |
 | 状态 | Live |
-| 更新时间 | 2026-08-17 |
+| 更新时间 | 2026-08-25 |
 | 职责 | 记录会影响模型、数据、训练或评测口径的已确认决策 |
 
 ## 决策表
@@ -46,8 +46,32 @@
 | DEC-042 | 2026-08-15 | Accepted / Docs Consolidated | NAV 文档从大量 V0/V1 碎片文件合并为主题总文档：规则、模型、数据、训练、评测、insight、资源。旧独立文件并入章节，不再作为事实源维护。 |
 | DEC-043 | 2026-08-17 | Accepted / Code Updated / Full-model 1-step Verified | V1 video branch 恢复 InfiniteWorld/Wan RFlow 口径：`x_t=(1-t)z_target+t noise`，`future_velocity` 监督 `noise-z_target`（`use_reversed_velocity=true`），推理采样用 `z <- z - v_rev * dt`。该改动只修正 video branch 的 noisy latent / velocity target / sampler；RegisterCell、A_hist/A_cur/A_noise、shared token interaction、pose/action heads 不改变。 |
 | DEC-044 | 2026-08-22 | Accepted / Operational Rule Updated | 为避免公共 `/sharedata` 被训练 latent 挤满，原始数据和 simulator assets 继续放在 `/sharedata`，但新的训练用 latent / tensor cache 真实落盘位置改为 `NAV/data/train/<dataset>/<latent_run>/`。`/sharedata/NAV/derived/` 只保留历史遗留、预算 manifest、轻量索引和必要临时 render 中间态。 |
+| DEC-045 | 2026-08-25 | Accepted / Code Updated / Training Pending | Stage3 R2R policy 通过在 dataloader 内复制包含较多 TURN/STOP target 的真实 window 改善动作分布，loss 保持普通 CE；正式 accuracy eval 仍默认使用不复制的 natural R2R window 分布。新 Stage3 必须从 Stage2 step2600 初始化，替代已出现 MOVE collapse 的 step1600-init run。 |
 
 ## 记录要求
+
+### DEC-045 补充（2026-08-25）
+
+- **动机**：旧 Stage3 step600 在 256-window natural-distribution 配对评测中，
+  `MOVE_FORWARD` 占预测 `2499/2560`，`TURN_LEFT/RIGHT recall=0`；正确、打乱、
+  空 instruction 的 top-1 预测几乎不变。证据位于
+  `result/v1_stage3_open_loop_policy/r2r_train_step600_instruction_ablation_256_20260825/summary.json`。
+- **window sampling**：只复制 dataloader 内的 window 引用，不复制 latent 文件。
+  对一个未来 10-step target，复制数为
+  `min(10, 1 + 2*n_turn + 2*n_stop)`；普通 MOVE-only window 保持一份，含更多
+  TURN/STOP 的真实 window 获得更多副本。复制上限避免少量样本无限主导训练。
+  在当前 69,648 个 unique window 上形成 478,951 个虚拟 window；按训练时
+  history 长度均匀采样的精确预期 token 比例由
+  `STOP/MOVE/LEFT/RIGHT=15.91/59.58/12.42/12.09%` 改善为
+  `20.44/51.82/13.97/13.77%`。
+- **loss**：保持普通、无 class weight 的 combo CE。动作比例的改善完全来自
+  dataloader 样本构造，便于直接审计训练实际看到的数据分布。
+- **评测口径**：训练可以 action-balanced；报告 accuracy、macro recall、
+  instruction ablation 时默认恢复 natural window sampling，避免在人工均衡分布上
+  抬高指标。
+- **替代关系**：替代
+  `stage3_r2r_future_action_from_stage2step1600_2k_20260823`；旧 run 与 checkpoint
+  只保留为失败诊断，不作为后续 Stage3 初始化。
 
 ### DEC-044 补充（2026-08-22）
 
