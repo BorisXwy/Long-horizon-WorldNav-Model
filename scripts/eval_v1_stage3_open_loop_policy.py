@@ -13,7 +13,7 @@ open-loop sequence, horizon-accuracy, and confusion-matrix figures.
 from __future__ import annotations
 
 import argparse
-from collections import Counter, defaultdict
+from collections import Counter, OrderedDict, defaultdict
 import json
 import os
 from pathlib import Path
@@ -85,6 +85,70 @@ def safe_div(numerator: float, denominator: float) -> float:
     return float(numerator) / max(float(denominator), 1.0)
 
 
+class InstructionAblator:
+    """Construct paired correct/shuffled/empty instruction conditions."""
+
+    def __init__(self, cfg: R2RStage3DataConfig, builder: R2RStage3PolicyBatchBuilder, *, seed: int) -> None:
+        self.cfg = cfg
+        self.rng = random.Random(seed)
+        self.candidates = [(window.dataset, window.sample_id) for window in builder.windows]
+        self.cache: OrderedDict[str, tuple[torch.Tensor, torch.Tensor]] = OrderedDict()
+        empty = torch.load(cfg.text_empty, map_location="cpu", weights_only=False)
+        self.empty_y = empty["y"].to(torch.bfloat16)
+        self.empty_mask = empty["y_mask"]
+
+    def _cached_text(self, dataset: str, sample_id: str) -> tuple[torch.Tensor, torch.Tensor]:
+        key = f"{dataset}/{sample_id}"
+        if key in self.cache:
+            value = self.cache.pop(key)
+            self.cache[key] = value
+            return value
+        path = self.cfg.text_cache_root / dataset / f"{sample_id}.pt"
+        if not path.is_file():
+            raise FileNotFoundError(f"missing shuffled instruction embedding: {path}")
+        payload = torch.load(path, map_location="cpu", weights_only=False)
+        value = (payload["y"].to(torch.bfloat16), payload["y_mask"])
+        self.cache[key] = value
+        while len(self.cache) > max(1, int(self.cfg.text_cache_items)):
+            self.cache.popitem(last=False)
+        return value
+
+    def apply(
+        self,
+        batch: dict[str, torch.Tensor],
+        meta: dict[str, Any],
+        *,
+        mode: str,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> tuple[dict[str, torch.Tensor], list[str]]:
+        if mode == "correct":
+            return batch, list(meta["text_sources"])
+        ys: list[torch.Tensor] = []
+        masks: list[torch.Tensor] = []
+        sources: list[str] = []
+        if mode == "empty":
+            for _ in meta["sample_ids"]:
+                ys.append(self.empty_y)
+                masks.append(self.empty_mask)
+                sources.append(str(self.cfg.text_empty))
+        elif mode == "shuffled":
+            for current_sample_id in meta["sample_ids"]:
+                dataset, sample_id = self.rng.choice(self.candidates)
+                while sample_id == current_sample_id:
+                    dataset, sample_id = self.rng.choice(self.candidates)
+                y, y_mask = self._cached_text(dataset, sample_id)
+                ys.append(y)
+                masks.append(y_mask)
+                sources.append(f"shuffled:{dataset}/{sample_id}")
+        else:
+            raise ValueError(mode)
+        out = dict(batch)
+        out["y"] = torch.cat(ys, dim=0).to(device=device, dtype=dtype, non_blocking=True)
+        out["y_mask"] = torch.cat(masks, dim=0).to(device=device, dtype=dtype, non_blocking=True)
+        return out, sources
+
+
 def plot_open_loop_sequences(
     examples: list[dict[str, Any]],
     *,
@@ -112,7 +176,7 @@ def plot_open_loop_sequences(
     ax.xaxis.tick_top()
     ax.set_yticks([])
     ax.set_title(
-        f"R2R train open-loop action chunks | checkpoint step {checkpoint_step} | {mode} A_noise",
+        f"R2R train open-loop action chunks | checkpoint step {checkpoint_step} | {mode}",
         pad=28,
     )
 
@@ -218,7 +282,7 @@ def plot_confusion(confusion: Counter[tuple[int, int]], *, mode: str, output_pat
     ax.set_yticks(np.arange(len(ACTION_IDS)), ACTION_NAMES)
     ax.set_xlabel("Predicted action")
     ax.set_ylabel("Ground-truth action")
-    ax.set_title(f"R2R train open-loop normalized confusion | {mode} A_noise")
+    ax.set_title(f"R2R train open-loop normalized confusion | {mode}")
     for row in range(normalized.shape[0]):
         for col in range(normalized.shape[1]):
             ax.text(col, row, f"{normalized[row, col]:.2f}\n(n={int(matrix[row, col])})", ha="center", va="center", fontsize=8, color=("white" if normalized[row, col] > 0.55 else "black"))
@@ -240,6 +304,11 @@ def main() -> None:
     parser.add_argument("--max-r2r-episodes", type=int, default=0)
     parser.add_argument("--seed", type=int, default=20260824)
     parser.add_argument("--action-noise-mode", choices=("random", "zero", "both"), default="both")
+    parser.add_argument(
+        "--instruction-mode",
+        choices=("correct", "shuffled", "empty", "all"),
+        default="correct",
+    )
     parser.add_argument("--latent-manifest-dir", type=Path, default=None)
     parser.add_argument("--rendered-manifest", type=Path, default=None)
     parser.add_argument("--text-cache-root", type=Path, default=None)
@@ -282,7 +351,17 @@ def main() -> None:
         return R2RStage3PolicyBatchBuilder(r2r_cfg)
 
     dataset_summary = make_builder().summary()
-    modes = ["random", "zero"] if args.action_noise_mode == "both" else [args.action_noise_mode]
+    action_modes = ["random", "zero"] if args.action_noise_mode == "both" else [args.action_noise_mode]
+    instruction_modes = ["correct", "shuffled", "empty"] if args.instruction_mode == "all" else [args.instruction_mode]
+    eval_specs = [
+        (
+            action_mode if instruction_modes == ["correct"] else f"{instruction_mode}__{action_mode}_anoise",
+            instruction_mode,
+            action_mode,
+        )
+        for instruction_mode in instruction_modes
+        for action_mode in action_modes
+    ]
     run_name = args.run_name or f"r2r_train_step{int(source.get('step', -1)):06d}_{time.strftime('%Y%m%d_%H%M%S')}"
     output_dir = args.out_dir / run_name
     output_dir.mkdir(parents=True, exist_ok=False)
@@ -296,17 +375,25 @@ def main() -> None:
         "num_batches": int(args.num_batches),
         "batch_size": int(args.batch_size),
         "history_micro_choices": r2r_cfg.history_micro_choices,
+        "instruction_modes": instruction_modes,
+        "action_noise_modes": action_modes,
         "dataset_split": "R2R train teacher-forced observations",
         "dataset_summary": dataset_summary,
         "modes": {},
     }
-    examples_by_mode: dict[str, list[dict[str, Any]]] = {mode: [] for mode in modes}
+    examples_by_mode: dict[str, list[dict[str, Any]]] = {mode_key: [] for mode_key, _, _ in eval_specs}
     confusions: dict[str, Counter[tuple[int, int]]] = {}
+    predictions_by_mode: dict[str, list[torch.Tensor]] = defaultdict(list)
+    probabilities_by_mode: dict[str, list[torch.Tensor]] = defaultdict(list)
+    sample_ids_by_mode: dict[str, list[str]] = defaultdict(list)
 
     with torch.no_grad():
-        for mode_index, mode in enumerate(modes):
-            torch.manual_seed(args.seed + mode_index)
+        for mode_key, instruction_mode, action_mode in eval_specs:
+            torch.manual_seed(args.seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(args.seed)
             builder = make_builder()
+            instruction_ablator = InstructionAblator(r2r_cfg, builder, seed=args.seed + 991)
             total_valid = total_ce = 0.0
             correct_combo = correct_trans = correct_rot = exact_sequences = 0.0
             sequence_count = 0.0
@@ -321,7 +408,14 @@ def main() -> None:
 
             for batch_index in range(args.num_batches):
                 batch, meta = builder.next_batch(device=device, dtype=dtype)
-                if mode == "zero":
+                batch, effective_text_sources = instruction_ablator.apply(
+                    batch,
+                    meta,
+                    mode=instruction_mode,
+                    device=device,
+                    dtype=dtype,
+                )
+                if action_mode == "zero":
                     batch["a_noise"].zero_()
                     batch["action_timestep"].zero_()
                 with torch.autocast(device_type="cuda", dtype=dtype, enabled=device.type == "cuda"):
@@ -330,6 +424,10 @@ def main() -> None:
                 target = batch["action_combo"].long()
                 mask = batch["action_loss_mask"].float()
                 pred = logits.argmax(dim=-1)
+                probabilities = logits.softmax(dim=-1)
+                predictions_by_mode[mode_key].append(pred.detach().cpu())
+                probabilities_by_mode[mode_key].append(probabilities.detach().cpu())
+                sample_ids_by_mode[mode_key].extend(meta["sample_ids"])
                 ce = F.cross_entropy(logits.reshape(-1, logits.shape[-1]), target.reshape(-1), reduction="none").view_as(target)
                 valid = mask > 0
                 valid_count = float(valid.float().sum().item())
@@ -373,16 +471,17 @@ def main() -> None:
                     confusion[(int(gt), int(predicted))] += 1
                     per_gt[int(gt)]["count"] += 1.0
                     per_gt[int(gt)]["correct"] += float(bool(ok))
-                if len(examples_by_mode[mode]) < args.save_examples:
-                    top_probability = logits.softmax(dim=-1).gather(-1, pred[..., None]).squeeze(-1)
+                if len(examples_by_mode[mode_key]) < args.save_examples:
+                    top_probability = probabilities.gather(-1, pred[..., None]).squeeze(-1)
                     for item_index in range(target.shape[0]):
-                        examples_by_mode[mode].append(
+                        examples_by_mode[mode_key].append(
                             {
                                 "sample_id": meta["sample_ids"][item_index],
                                 "history_micro": history_micro,
                                 "label_start_action": int(meta["label_start_actions"][item_index]),
                                 "terminal": bool(meta["terminal_count"] > 0),
-                                "text_source": meta["text_sources"][item_index],
+                                "instruction_mode": instruction_mode,
+                                "text_source": effective_text_sources[item_index],
                                 "gt_combo": [int(value) for value in target[item_index].cpu().tolist()],
                                 "gt_name": [action_name(int(value)) for value in target[item_index].cpu().tolist()],
                                 "pred_combo": [int(value) for value in pred[item_index].cpu().tolist()],
@@ -391,10 +490,10 @@ def main() -> None:
                                 "pred_top_probability": [float(value) for value in top_probability[item_index].cpu().tolist()],
                             }
                         )
-                        if len(examples_by_mode[mode]) >= args.save_examples:
+                        if len(examples_by_mode[mode_key]) >= args.save_examples:
                             break
                 if (batch_index + 1) % 32 == 0:
-                    print(json.dumps({"event": "stage3_open_loop_progress", "mode": mode, "batches": batch_index + 1, "combo_acc": safe_div(correct_combo, total_valid)}, ensure_ascii=False), flush=True)
+                    print(json.dumps({"event": "stage3_open_loop_progress", "mode": mode_key, "batches": batch_index + 1, "combo_acc": safe_div(correct_combo, total_valid)}, ensure_ascii=False), flush=True)
 
             per_class_recall = [
                 {
@@ -409,6 +508,8 @@ def main() -> None:
             majority = gt_counter.most_common(1)[0] if gt_counter else (None, 0)
             elapsed = time.time() - started
             mode_payload = {
+                "instruction_mode": instruction_mode,
+                "action_noise_mode": action_mode,
                 "samples": int(sequence_count),
                 "valid_actions": total_valid,
                 "ce": safe_div(total_ce, total_valid),
@@ -455,22 +556,74 @@ def main() -> None:
                 "elapsed_sec": elapsed,
                 "sec_per_batch": elapsed / max(args.num_batches, 1),
             }
-            summary["modes"][mode] = mode_payload
-            confusions[mode] = confusion
+            summary["modes"][mode_key] = mode_payload
+            confusions[mode_key] = confusion
 
+    instruction_sensitivity: dict[str, Any] = {}
+    if "correct" in instruction_modes:
+        for action_mode in action_modes:
+            reference_key = (
+                action_mode
+                if instruction_modes == ["correct"]
+                else f"correct__{action_mode}_anoise"
+            )
+            reference_pred = torch.cat(predictions_by_mode[reference_key], dim=0)
+            reference_prob = torch.cat(probabilities_by_mode[reference_key], dim=0).float()
+            instruction_sensitivity[action_mode] = {}
+            for instruction_mode in instruction_modes:
+                if instruction_mode == "correct":
+                    continue
+                compared_key = f"{instruction_mode}__{action_mode}_anoise"
+                if sample_ids_by_mode[compared_key] != sample_ids_by_mode[reference_key]:
+                    raise RuntimeError(
+                        f"paired instruction ablation sampled different windows: {reference_key} vs {compared_key}"
+                    )
+                compared_pred = torch.cat(predictions_by_mode[compared_key], dim=0)
+                compared_prob = torch.cat(probabilities_by_mode[compared_key], dim=0).float()
+                total_variation = 0.5 * (reference_prob - compared_prob).abs().sum(dim=-1)
+                kl = (
+                    reference_prob.clamp_min(1e-8)
+                    * (
+                        reference_prob.clamp_min(1e-8).log()
+                        - compared_prob.clamp_min(1e-8).log()
+                    )
+                ).sum(dim=-1)
+                instruction_sensitivity[action_mode][instruction_mode] = {
+                    "paired_samples": len(sample_ids_by_mode[reference_key]),
+                    "paired_actions": int(reference_pred.numel()),
+                    "top1_disagreement_ratio": float((reference_pred != compared_pred).float().mean().item()),
+                    "probability_total_variation_mean": float(total_variation.mean().item()),
+                    "kl_correct_to_ablation_mean": float(kl.mean().item()),
+                }
+    summary["instruction_sensitivity"] = instruction_sensitivity
     (output_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
     (output_dir / "examples.json").write_text(json.dumps(examples_by_mode, ensure_ascii=False, indent=2) + "\n")
     plot_horizon_accuracy(summary["modes"], output_dir / "open_loop_metrics.png")
-    for mode in modes:
+    for mode_key, _, _ in eval_specs:
         plot_open_loop_sequences(
-            examples_by_mode[mode],
+            examples_by_mode[mode_key],
             checkpoint_step=int(source.get("step", -1)),
-            mode=mode,
-            output_path=output_dir / f"open_loop_sequences_{mode}.png",
+            mode=mode_key,
+            output_path=output_dir / f"open_loop_sequences_{mode_key}.png",
             max_examples=args.plot_examples,
         )
-        plot_confusion(confusions[mode], mode=mode, output_path=output_dir / f"confusion_{mode}.png")
-    print(json.dumps({"status": "ok", "output_dir": str(output_dir), "modes": summary["modes"]}, ensure_ascii=False, indent=2))
+        plot_confusion(
+            confusions[mode_key],
+            mode=mode_key,
+            output_path=output_dir / f"confusion_{mode_key}.png",
+        )
+    print(
+        json.dumps(
+            {
+                "status": "ok",
+                "output_dir": str(output_dir),
+                "modes": summary["modes"],
+                "instruction_sensitivity": instruction_sensitivity,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":
