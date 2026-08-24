@@ -63,6 +63,7 @@ class FinalStage2WanConfig:
     z_obs_stream: str = "main_prefix_clean_obs"
     action_condition_injection: str = "shared_condition_tokens"
     use_channel_mask: bool = False
+    policy_head_type: str = "iw_flow_combo"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -117,6 +118,8 @@ class FinalStage2WanModel(nn.Module):
         self.cfg = cfg or FinalStage2WanConfig()
         if self.cfg.register_injection not in {"main_prefix", "condition_memory"}:
             raise ValueError("register_injection must be main_prefix or condition_memory")
+        if self.cfg.policy_head_type not in {"iw_flow_combo", "linear"}:
+            raise ValueError("policy_head_type must be iw_flow_combo or linear")
         iw_cfg = self.cfg.to_iw_aligned_config()
         self.iw_cfg = iw_cfg
         self.backbone = WanModel(
@@ -134,6 +137,13 @@ class FinalStage2WanModel(nn.Module):
         )
         self.register_memory = SpatialRegisterMemory(iw_cfg)
         self.action_interface = IWActionInterface(iw_cfg)
+        self.policy_linear_head = (
+            nn.Linear(iw_cfg.hidden_dim, iw_cfg.combo_action_vocab_size)
+            if self.cfg.policy_head_type == "linear"
+            else None
+        )
+        if self.policy_linear_head is not None:
+            self._freeze_unused_action_output_heads()
         self.register_condition_proj = nn.Sequential(
             nn.LayerNorm(iw_cfg.latent_channels),
             nn.Linear(iw_cfg.latent_channels, iw_cfg.hidden_dim),
@@ -162,6 +172,44 @@ class FinalStage2WanModel(nn.Module):
                 self._capture_pose_layer_hidden
             )
         self.hmpc_removed = False
+
+    def _freeze_unused_action_output_heads(self) -> None:
+        """Disable legacy flow/classification decoders in linear-policy mode."""
+
+        for module in (
+            self.action_interface.action_out_norm,
+            self.action_interface.action_velocity_head,
+            self.action_interface.primitive_head,
+            self.action_interface.combo_head,
+            self.action_interface.move_head,
+            self.action_interface.view_head,
+        ):
+            module.requires_grad_(False)
+
+    def enable_linear_policy_head(self) -> dict[str, Any]:
+        """Attach a fresh Linear(hidden_dim -> 144) discrete policy head.
+
+        This is called only after a Stage2 checkpoint has loaded, so the full
+        shared backbone/Register/video/pose state remains intact while the
+        Stage3-only classifier starts from a clean initialization.
+        """
+
+        if self.policy_linear_head is None:
+            reference = self.backbone.patch_embedding.weight
+            self.policy_linear_head = nn.Linear(
+                self.cfg.hidden_dim,
+                self.cfg.combo_action_vocab_size,
+            ).to(device=reference.device, dtype=reference.dtype)
+        self.cfg.policy_head_type = "linear"
+        self._freeze_unused_action_output_heads()
+        return {
+            "policy_head_type": "linear",
+            "input_dim": self.cfg.hidden_dim,
+            "output_dim": self.cfg.combo_action_vocab_size,
+            "parameters": sum(parameter.numel() for parameter in self.policy_linear_head.parameters()),
+            "initialization": "fresh_after_stage2_checkpoint_load",
+            "legacy_output_heads_frozen": True,
+        }
 
     def _capture_pose_layer_hidden(self, _module, _inputs, output) -> None:
         if isinstance(output, tuple):
@@ -331,10 +379,21 @@ class FinalStage2WanModel(nn.Module):
             video = video[:, :, -z_future_noisy.shape[2] :].contiguous()
         shared_action_hidden = out.get("shared_action_hidden") if isinstance(out, dict) else None
         prefix_hidden = out.get("prefix_video_hidden") if isinstance(out, dict) else None
+        if self.cfg.policy_head_type == "linear":
+            if shared_action_hidden is None or self.policy_linear_head is None:
+                raise RuntimeError("linear policy head requires shared action hidden tokens")
+            action_outputs = {
+                "action_hidden": shared_action_hidden[:, : self.cfg.action_horizon],
+                "combo_logits": self.policy_linear_head(
+                    shared_action_hidden[:, : self.cfg.action_horizon].to(self.policy_linear_head.weight.dtype)
+                ),
+            }
+        else:
+            action_outputs = self.action_interface.decode(shared_action_hidden)
         return {
             "future_velocity": video,
             "shared_action_hidden": shared_action_hidden,
-            "action_outputs": self.action_interface.decode(shared_action_hidden),
+            "action_outputs": action_outputs,
             "prefix_video_hidden": prefix_hidden,
             "pose_layer_hidden": self._pose_layer_hidden,
             "registers": registers,
@@ -406,10 +465,10 @@ class FinalStage2WanModel(nn.Module):
         action_outputs = out["action_outputs"]
         if action_outputs is None:
             raise RuntimeError("forward_stage3_policy requires shared action hidden")
-        pred_velocity = action_outputs["action_velocity"]
+        pred_velocity = action_outputs.get("action_velocity")
         if "action_combo" in batch:
-            loss_action_flow = torch.zeros((), device=pred_velocity.device, dtype=pred_velocity.dtype)
             combo_logits = action_outputs["combo_logits"]
+            loss_action_flow = torch.zeros((), device=combo_logits.device, dtype=combo_logits.dtype)
             combo_target = batch["action_combo"].to(device=combo_logits.device).long()
             if combo_target.ndim == 1:
                 combo_logits = combo_logits[:, 0]
@@ -419,6 +478,8 @@ class FinalStage2WanModel(nn.Module):
                 reduction="none",
             ).view_as(combo_target)
         else:
+            if pred_velocity is None:
+                raise RuntimeError("continuous action targets require the legacy flow action head")
             action_target = batch["action_target"].to(device=pred_velocity.device, dtype=pred_velocity.dtype)
             if action_target.ndim == 2:
                 pred_velocity = pred_velocity[:, 0]
@@ -450,7 +511,7 @@ class FinalStage2WanModel(nn.Module):
             "loss_action_flow": loss_action_flow.detach(),
             "loss_ce_aux": loss_ce.detach(),
             "action_velocity": pred_velocity,
-            "primitive_logits": action_outputs["primitive_logits"],
+            "primitive_logits": action_outputs.get("primitive_logits"),
             "combo_logits": action_outputs["combo_logits"],
         }
 
@@ -466,6 +527,13 @@ class FinalStage2WanModel(nn.Module):
             "z_obs_stream": self.cfg.z_obs_stream,
             "a_cur_injection": self.cfg.action_condition_injection,
             "a_noise_path": "shared_action_tokens_main_stream",
+            "policy_head_type": self.cfg.policy_head_type,
+            "policy_query_path": "unchanged_action_noise_plus_timestep",
+            "policy_head_parameters": (
+                sum(parameter.numel() for parameter in self.policy_linear_head.parameters())
+                if self.policy_linear_head is not None
+                else sum(parameter.numel() for parameter in self.action_interface.combo_head.parameters())
+            ),
             "pose_head_type": self.cfg.pose_head_type,
             "pose_readout_layer": self.cfg.pose_readout_layer,
             "branch_mask_rule": "A_noise and Z_future_noise are mutually isolated in Wan self-attention",

@@ -426,6 +426,9 @@ def main() -> None:
                 if action_mode == "zero":
                     batch["a_noise"].zero_()
                     batch["action_timestep"].zero_()
+                else:
+                    batch["a_noise"].normal_()
+                    batch["action_timestep"].uniform_()
                 with torch.autocast(device_type="cuda", dtype=dtype, enabled=device.type == "cuda"):
                     out = model.forward_stage3_policy(batch, lambda_ce=1.0)
                 logits = out["combo_logits"].float()

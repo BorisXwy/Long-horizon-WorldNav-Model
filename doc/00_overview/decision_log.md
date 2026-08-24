@@ -47,8 +47,27 @@
 | DEC-043 | 2026-08-17 | Accepted / Code Updated / Full-model 1-step Verified | V1 video branch 恢复 InfiniteWorld/Wan RFlow 口径：`x_t=(1-t)z_target+t noise`，`future_velocity` 监督 `noise-z_target`（`use_reversed_velocity=true`），推理采样用 `z <- z - v_rev * dt`。该改动只修正 video branch 的 noisy latent / velocity target / sampler；RegisterCell、A_hist/A_cur/A_noise、shared token interaction、pose/action heads 不改变。 |
 | DEC-044 | 2026-08-22 | Accepted / Operational Rule Updated | 为避免公共 `/sharedata` 被训练 latent 挤满，原始数据和 simulator assets 继续放在 `/sharedata`，但新的训练用 latent / tensor cache 真实落盘位置改为 `NAV/data/train/<dataset>/<latent_run>/`。`/sharedata/NAV/derived/` 只保留历史遗留、预算 manifest、轻量索引和必要临时 render 中间态。 |
 | DEC-045 | 2026-08-25 | Accepted / Code Updated / Training Pending | Stage3 R2R policy 通过在 dataloader 内复制包含较多 TURN/STOP target 的真实 window 改善动作分布，loss 保持普通 CE；正式 accuracy eval 仍默认使用不复制的 natural R2R window 分布。新 Stage3 必须从 Stage2 step2600 初始化，替代已出现 MOVE collapse 的 step1600-init run。 |
+| DEC-046 | 2026-08-25 | Accepted / Code Updated / Training Pending | Stage3 只替换 backbone 之后的离散 action readout：加载完整 Stage2 step2600 后，从 Wan 最后一层现有 action-output slots 读取 `[B,10,1536]` hidden，经 fresh `Linear(1536,144)` 输出 combo logits。backbone 之前及内部的输入、A_noise/timestep、token layout 和 mask 全部不变；旧 flow output heads 冻结且不进入 loss。 |
 
 ## 记录要求
+
+### DEC-046 补充（2026-08-25）
+
+- **权重加载**：先按原 Stage2 图严格加载 step2600，再挂接 Stage3 专用
+  `Linear(hidden_dim=1536, combo_dim=144)`；因此 shared Wan backbone、RegisterCell、
+  video branch、pose head 与 action-token input path 均继承 step2600，只有新离散
+  policy head 随机初始化。
+- **数据流**：backbone 输入侧完全不改，未来 10 个 action slot 仍按既有
+  `A_noise + action timestep + position` 编码和既有 attention mask 经过 shared Wan。
+  唯一改动位于 backbone 之后：直接切出 Wan 最后一层现有 action-output 位置的
+  10 个 hidden token `[B,10,1536]`，分别经同一个 Linear 得到 `[B,10,144]`
+  logits。
+- **loss**：Stage3 action loss 只有普通 combo CE；`loss_action_flow=0` 只作为兼容
+  日志字段。旧 action flow/classification output modules 冻结且不参与 forward decode，
+  visual/pose replay 保持不变。
+- **兼容性**：Stage2 续训仍使用原 `iw_flow_combo` 配置，不受该 Stage3-only head
+  改造影响；新的 Stage3 checkpoint 在 `model_config.policy_head_type=linear` 中记录
+  构图方式，可由 evaluator 原样恢复。
 
 ### DEC-045 补充（2026-08-25）
 

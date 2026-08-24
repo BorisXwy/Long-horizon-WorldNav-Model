@@ -54,6 +54,7 @@ class TrainConfig:
     turn_copy_bonus: int
     stop_copy_bonus: int
     max_copy_factor: int
+    policy_head_type: str
     dtype: str
     save_every: int
     log_every: int
@@ -177,6 +178,7 @@ def main() -> None:
     parser.add_argument("--turn-copy-bonus", type=int, default=2)
     parser.add_argument("--stop-copy-bonus", type=int, default=2)
     parser.add_argument("--max-copy-factor", type=int, default=10)
+    parser.add_argument("--policy-head-type", choices=("linear",), default="linear")
     parser.add_argument("--dtype", choices=("bf16", "fp16", "fp32"), default="bf16")
     parser.add_argument("--save-every", type=int, default=200)
     parser.add_argument("--log-every", type=int, default=1)
@@ -206,6 +208,7 @@ def main() -> None:
     run_dir.mkdir(parents=True, exist_ok=False)
 
     model, source_ckpt = load_stage2_model(args.checkpoint, device=device, dtype=dtype)
+    policy_head_audit = model.enable_linear_policy_head()
     stage2_data_cfg = make_dataclass(FinalStage2DataConfig, source_ckpt["data_config"])
     stage2_data_cfg.batch_size = args.batch_size
     stage2_data_cfg.seed = args.seed + 1000
@@ -246,6 +249,7 @@ def main() -> None:
         turn_copy_bonus=args.turn_copy_bonus,
         stop_copy_bonus=args.stop_copy_bonus,
         max_copy_factor=args.max_copy_factor,
+        policy_head_type=args.policy_head_type,
         dtype=args.dtype,
         save_every=args.save_every,
         log_every=args.log_every,
@@ -262,6 +266,7 @@ def main() -> None:
         "replay_data": replay_builder.summary(),
         "model": model.structural_report(),
         "source_checkpoint_step": int(source_ckpt["step"]),
+        "policy_head_audit": policy_head_audit,
         "sample_rule": {
             "history": "K previous T4 micro chunks update Register with A_hist",
             "z_obs": "current observed T4 micro chunk",
@@ -273,6 +278,7 @@ def main() -> None:
             "copy_factor": "min(max_copy_factor, 1 + turn_copy_bonus * n_turn + stop_copy_bonus * n_stop)",
             "token_loss": "ordinary unweighted combo cross-entropy",
         },
+        "policy_decode": "unchanged action-token inputs -> final shared Wan action-slot hidden [B,10,1536] -> Linear(1536,144)",
         "loss": "L = lambda_ce * CE(combo_logits, action_combo) + lambda_video_replay * L_visual_replay + lambda_pose_replay * L_pose_replay",
     }
     write_json(run_dir / "formal_preflight.json", preflight)
