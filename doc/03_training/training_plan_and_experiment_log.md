@@ -8077,3 +8077,87 @@ stage3_final_vln smoke:
 - Stage3 R2R train open-loop：自然分布正确 instruction 下 accuracy 为 `58.75%`（random A_noise）或 `60.16%`（zero A_noise），多数类基线为 `60.08%`；TURN_LEFT/RIGHT recall 均为0。打乱 instruction 的 paired top-1 disagreement 仅 `0.86–1.48%`，说明 step400 尚未有效利用 instruction。
 - 完整报告与配对帧位于 `result/v1_stage2_stage3_comparison/paired_step3400_vs_step400_seed20260827/`。
 - 解释限制：Stage3 从 Stage2 step2600 分叉，而比较的当前 Stage2 已到 step3400；此结果反映当前两条分支的实际差异，不能将全部差值直接归因为 Stage3 遗忘。
+
+## 2026-08-26：Stage3 单动作四分类均衡诊断
+
+本实验不提前修改 VLN observation 的时间粒度，只验证当前完整共享模型是否能在
+更直接的离散监督下学出有效动作预测；因此它是 `diagnostic`，不是对最终
+Stage3 时间接口的重新定版。
+
+```text
+source checkpoint:
+  Stage2 step3400
+
+完整输入与共享模型：
+  K=1..7 T4 history + A_hist -> Register
+  Register + current T4 Z_obs + instruction + one fixed action query
+  single shared WanBlock backbone
+
+policy readout:
+  final action hidden [B,1,1536]
+  -> FP32 LayerNorm
+  -> Linear(1536,512) + GELU + Linear(512,4)
+  -> logits [B,1,4]
+
+target:
+  one next action in {STOP, MOVE_FORWARD, TURN_LEFT, TURN_RIGHT}
+
+sampling:
+  physical BS=1, grad_accum=16, EBS=16
+  every four consecutive policy samples contain each class exactly once
+  minority examples are sampled with replacement; latent files are not copied
+
+loss:
+  L = CE_4(next_action)
+    + 0.25 * L_visual_replay
+    + 0.05 * L_pose_replay
+
+optimizer:
+  shared backbone/Register/video/pose: bf16 forward, lr=2e-6
+  fresh policy head + action query input modules: FP32, lr=1e-4
+```
+
+现有单动作锚点为 `88,602` 个，天然分布为：
+
+| action | anchors | natural ratio | effective train ratio |
+| --- | ---: | ---: | ---: |
+| STOP | 915 | 1.03% | 25% |
+| MOVE_FORWARD | 63,527 | 71.70% | 25% |
+| TURN_LEFT | 11,931 | 13.47% | 25% |
+| TURN_RIGHT | 12,229 | 13.80% | 25% |
+
+代码入口：
+
+```text
+src/nav/v1/stage3_single_action.py
+scripts/train_v1_stage3_r2r_single_action.py
+```
+
+正式诊断 run：
+
+```text
+Stage3 GPU1:
+  log/v1_stage3_r2r_single_action/
+    stage3_r2r_single_action_balanced_from_stage2step3400_2k_20260826/
+
+Stage2 GPU0 continuation:
+  log/v1_stage2_final_cotrain/
+    stage2_from_step3400_continue_lr2e6_1k_20260826/
+```
+
+验收时不能只看 balanced accuracy；至少同时报告四类 recall、macro recall、
+自然分布 accuracy/majority baseline 和 instruction shuffle/empty ablation。
+
+启动核对：正式 Stage3 run 的第一个完整 optimizer step 已完成，包含16次真实
+R2R policy forward/backward 与16次 Stage2 replay forward/backward：
+
+```text
+step1 seconds/step = 140.49
+cuda_max_memory    = 28.23 GiB
+target counts      = STOP/MOVE/LEFT/RIGHT 各4
+policy CE          = 1.3964（随机四分类参考 ln(4)=1.3863）
+action accuracy    = 12.5%
+instruction cache  = 16 hits / 0 fallback
+```
+
+首步只证明完整链路、类别配额和监督形状正确，不作为收敛效果结论。
