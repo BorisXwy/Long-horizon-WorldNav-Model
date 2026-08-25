@@ -63,6 +63,7 @@ class TrainConfig:
     resume_checkpoint: str | None
     resume_from_step: int
     resume_optimizer: bool
+    override_resume_lr: bool
     output_root: str
     tensorboard_port: int
 
@@ -209,6 +210,11 @@ def main() -> None:
     parser.add_argument("--checkpoint", type=Path, default=WAN_DEFAULT)
     parser.add_argument("--resume-checkpoint", type=Path, default=None)
     parser.add_argument("--no-resume-optimizer", action="store_true")
+    parser.add_argument(
+        "--override-resume-lr",
+        action="store_true",
+        help="Keep restored AdamW moments but replace every restored parameter-group LR with --lr.",
+    )
     parser.add_argument("--output-root", type=Path, default=ROOT / "log" / "v1_stage2_final_cotrain")
     parser.add_argument("--tensorboard-port", type=int, default=6017)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
@@ -254,6 +260,7 @@ def main() -> None:
         resume_checkpoint=str(args.resume_checkpoint) if args.resume_checkpoint else None,
         resume_from_step=0,
         resume_optimizer=not args.no_resume_optimizer,
+        override_resume_lr=args.override_resume_lr,
         output_root=str(args.output_root),
         tensorboard_port=args.tensorboard_port,
     )
@@ -335,6 +342,13 @@ def main() -> None:
             device=device,
             resume_optimizer=not args.no_resume_optimizer,
         )
+        resume_audit["optimizer_lrs_restored"] = [float(group["lr"]) for group in optimizer.param_groups]
+        if args.override_resume_lr:
+            for group in optimizer.param_groups:
+                group["lr"] = float(args.lr)
+            resume_audit["optimizer_lrs_after_override"] = [
+                float(group["lr"]) for group in optimizer.param_groups
+            ]
         resume_from_step = int(resume_audit["step"])
         train_cfg.resume_from_step = resume_from_step
         preflight["train_config"] = asdict(train_cfg)
