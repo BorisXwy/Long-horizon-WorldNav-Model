@@ -8066,3 +8066,14 @@ stage3_final_vln smoke:
    重启 Stage3 final VLN cotrain。
 4. GPU1 的 Stage2 layer16-probe cotrain 保持运行。
 ```
+
+## 2026-08-25：Stage2 step3400 / Stage3 step400 最新权重评测
+
+- Stage2 已按要求停止，最新 checkpoint 为 `step3400`；Stage3 训练保持运行，评测使用当时最新完整 checkpoint `step400`。
+- evaluator 已统一兼容 Stage2 `data_config` 与 Stage3 `stage2_replay_data_config`，并在模型加载后重新固定 seed，保证两版使用相同窗口、timestep 与 diffusion noise。
+- Mixed 64-batch 配对评测：Stage2/Stage3 latent x0 MSE 分别为 `0.02851/0.03542`，Stage3 高 `24.2%`。
+- RE10K 64-batch pose：Stage2/Stage3 translation MAE 为 `0.04699/0.03814`，rotation error 为 `7.740°/7.368°`；Stage3 pose 未退化，但生成 latent MSE 更高。
+- 4条完整30步生成：Stage2/Stage3 平均 RGB PSNR 为 `21.320/20.091 dB`；Stage3 下降 `1.229 dB`，逐帧可见更多纹理模糊和涂抹。所有视频均为有效 H.264、896×448、13帧。
+- Stage3 R2R train open-loop：自然分布正确 instruction 下 accuracy 为 `58.75%`（random A_noise）或 `60.16%`（zero A_noise），多数类基线为 `60.08%`；TURN_LEFT/RIGHT recall 均为0。打乱 instruction 的 paired top-1 disagreement 仅 `0.86–1.48%`，说明 step400 尚未有效利用 instruction。
+- 完整报告与配对帧位于 `result/v1_stage2_stage3_comparison/paired_step3400_vs_step400_seed20260827/`。
+- 解释限制：Stage3 从 Stage2 step2600 分叉，而比较的当前 Stage2 已到 step3400；此结果反映当前两条分支的实际差异，不能将全部差值直接归因为 Stage3 遗忘。
