@@ -1402,3 +1402,9 @@
 - 新学习率：`2e-6`。
 - 优化器：保留 checkpoint 中 AdamW 的一、二阶动量，但在恢复后显式覆盖所有 parameter group 的学习率；恢复前后学习率必须写入 `resume_audit.json`，避免 checkpoint 内旧 LR 静默覆盖命令行设置。
 - Stage3 线性动作头训练不受本次调整影响。
+
+### DEC-048：Stage2/Stage3 使用同一视频与 3D 评测链路
+
+- 时间：2026-08-25
+- 决定：正式 Stage2 evaluator 同时识别 Stage2 checkpoint 的 `data_config` 与 Stage3 checkpoint 的 `stage2_replay_data_config`。
+- 目的：对 Stage2 与 Stage3 使用完全相同的数据构造、完整 RFlow 去噪和 pose 指标口径，直接衡量 Stage3 policy cotrain 后的生成/3D 遗忘，而不复制或改写 checkpoint。
