@@ -1408,3 +1408,4 @@
 - 时间：2026-08-25
 - 决定：正式 Stage2 evaluator 同时识别 Stage2 checkpoint 的 `data_config` 与 Stage3 checkpoint 的 `stage2_replay_data_config`。
 - 目的：对 Stage2 与 Stage3 使用完全相同的数据构造、完整 RFlow 去噪和 pose 指标口径，直接衡量 Stage3 policy cotrain 后的生成/3D 遗忘，而不复制或改写 checkpoint。
+- 配对随机性：模型 checkpoint 加载完成后重新设置评测 seed，消除 Stage2/Stage3 不同 action head 构造过程对 RNG 的消耗差异；两版必须使用相同窗口、timestep 与初始 diffusion noise。

@@ -198,6 +198,11 @@ def main() -> None:
     if device.type == "cuda":
         torch.cuda.manual_seed_all(args.eval_seed)
     model, ckpt = load_model(args.checkpoint, device, dtype)
+    # Keep Stage2/Stage3 full-denoise comparisons paired even though their
+    # post-backbone action-head constructors consume different RNG streams.
+    torch.manual_seed(args.eval_seed)
+    if device.type == "cuda":
+        torch.cuda.manual_seed_all(args.eval_seed)
     data_cfg = make_dataclass(FinalStage2DataConfig, stage2_data_payload(ckpt))
     data_cfg.batch_size = 1
     data_cfg.seed = args.eval_seed

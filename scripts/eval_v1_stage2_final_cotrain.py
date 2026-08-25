@@ -299,6 +299,13 @@ def main() -> None:
     if device.type == "cuda":
         torch.cuda.manual_seed_all(args.eval_seed)
     model, ckpt = load_model(args.checkpoint, device, dtype)
+    # Stage2 and Stage3 instantiate different post-backbone action heads, which
+    # consume different amounts of RNG during construction.  Reset after model
+    # loading so paired checkpoint evaluations use identical sampled windows,
+    # timesteps, and diffusion noise.
+    torch.manual_seed(args.eval_seed)
+    if device.type == "cuda":
+        torch.cuda.manual_seed_all(args.eval_seed)
     data_cfg = make_dataclass(FinalStage2DataConfig, stage2_data_payload(ckpt))
     data_cfg.batch_size = args.batch_size
     data_cfg.seed = args.eval_seed
