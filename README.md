@@ -72,6 +72,7 @@ doc/_templates/    新文档和新实验记录模板
 | NAV-MDL-001 | Live / Source of Truth | 模型结构与接口总览 | `doc/01_model/model_evolution_and_current_architecture.md` |
 | NAV-DAT-010 | Live / Source of Truth | 数据准备、Schema 与状态总览 | `doc/02_data/data_preparation_schema_and_status.md` |
 | NAV-TRN-010 | Live / Source of Truth | 训练计划与实验记录总览 | `doc/03_training/training_plan_and_experiment_log.md` |
+| NAV-TRN-012 | Completed / Weekly Snapshot | 2026-08-19 至 2026-08-26 周进展 | `doc/03_training/weekly_progress_report_20260826.md` |
 | NAV-EVL-010 | Live / Reference | 评测、复现与 Benchmark 总览 | `doc/04_evaluation/evaluation_reproduction_and_benchmarks.md` |
 | NAV-INS-001 | Active / 受规则约束 | Insight 记录 | `doc/05_insight/insight_log.md` |
 | NAV-OPS-001 | Live | 资源总账 | `doc/06_operations/resource_inventory.md` |
