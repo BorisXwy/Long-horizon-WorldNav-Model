@@ -98,6 +98,34 @@ log/     原始训练日志、TensorBoard 与 checkpoint。
 result/  生成视频、评测输入输出和汇总指标。
 ```
 
+## V1 源代码组装入口
+
+正式 V1 代码按“模块定义—组装入口—训练/推理脚本”分层：
+
+```text
+src/nav/v1/model/
+  world_model.py   shared Wan/Register/Video/Pose 正式模型定义
+  policy.py        Stage3 policy head 与完整 wrapper
+  builder.py       build_model()；统一恢复 checkpoint 并组装最终模型
+
+src/nav/v1/data/
+  stage2.py        RE10K/SpatialVID/DL3DV mixed-window 数据实现
+  r2r.py           R2R window 与自然分布 loader
+  sampler.py       可替换采样策略，如四类严格均衡 sampler
+  loader.py        build_data_loader()；统一组装数据流水线
+  config.py        checkpoint/config 的统一反序列化
+
+scripts/
+  只负责参数、optimizer、训练循环、推理循环和产物记录；正式入口通过
+  build_model() / build_data_loader() 获取模型和数据，不再复制构图代码。
+```
+
+新增实验优先注册新的 model assembler 或 data loader/sampler，再由脚本选择名称
+完成组合。`nav.v1.stage2_final`、`nav.v1.stage3_r2r` 和
+`nav.v1.stage3_single_action` 仅保留旧脚本 import 兼容，不再承载 canonical 实现。
+本次迁移的逐 tensor、完整 checkpoint 和 Wan 前向等价验证记录位于
+`result/v1_modular_refactor/assembly_equivalence_20260827/report.md`。
+
 ## 更新原则
 
 1. 新内容优先进入对应主题总文档，不再新增碎片文件。

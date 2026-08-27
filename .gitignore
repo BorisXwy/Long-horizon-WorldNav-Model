@@ -35,7 +35,7 @@ tensorboard/
 *.gif
 
 # Dataset/cache directories
-data/
+/data/
 datasets/
 cache/
 cached/
@@ -70,4 +70,3 @@ dist/
 Thumbs.db
 .vscode/
 .idea/
-

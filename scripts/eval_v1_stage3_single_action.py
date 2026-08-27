@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter, defaultdict
-from dataclasses import fields
 import json
 import os
 from pathlib import Path
@@ -32,30 +31,22 @@ sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(INF_WORLD_ROOT))
 
 from eval_v1_stage3_open_loop_policy import InstructionAblator  # noqa: E402
-from nav.v1.stage2_final import FinalStage2WanConfig, FinalStage2WanModel  # noqa: E402
-from nav.v1.stage3_r2r import (  # noqa: E402
+from nav.v1.data import (  # noqa: E402
     ACTION_NAMES,
+    BalancedSingleActionR2RBatchBuilder,
     R2RStage3DataConfig,
     R2RStage3PolicyBatchBuilder,
+    build_data_loader,
+    r2r_data_config_from_dict,
     vln_action_to_combo,
 )
-from nav.v1.stage3_single_action import (  # noqa: E402
-    BalancedSingleActionR2RBatchBuilder,
-    SingleActionPolicyConfig,
-    SingleActionStage3Model,
-)
+from nav.v1.model import SingleActionStage3Model, build_model  # noqa: E402
 from train_v1_stage2_final_cotrain import install_non_reentrant_wan_checkpoint, torch_dtype  # noqa: E402
-from train_v1_stage3_r2r_future_action import make_dataclass  # noqa: E402
 
 
 CLASS_IDS = tuple(sorted(ACTION_NAMES))
 CLASS_NAMES = [ACTION_NAMES[index] for index in CLASS_IDS]
 COMBO_TO_CLASS = {vln_action_to_combo(index): index for index in CLASS_IDS}
-
-
-def make_policy_config(payload: dict[str, Any]) -> SingleActionPolicyConfig:
-    allowed = {field.name for field in fields(SingleActionPolicyConfig)}
-    return SingleActionPolicyConfig(**{key: value for key, value in payload.items() if key in allowed})
 
 
 def load_model(
@@ -64,34 +55,22 @@ def load_model(
     device: torch.device,
     dtype: torch.dtype,
 ) -> tuple[SingleActionStage3Model, dict[str, Any]]:
-    payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
-    required = {"model", "model_config", "single_action_policy_config", "single_action_policy_head"}
-    missing = sorted(required.difference(payload))
-    if missing:
-        raise RuntimeError(f"not a single-action Stage3 checkpoint; missing keys: {missing}")
-
-    world_cfg = make_dataclass(FinalStage2WanConfig, payload["model_config"])
-    world_model = FinalStage2WanModel(world_cfg)
-    world_model.remove_hmpc()
-    world_model._freeze_unused_action_output_heads()
-    world_model.to(device=device, dtype=dtype)
-
-    policy_cfg = make_policy_config(payload["single_action_policy_config"])
-    model = SingleActionStage3Model(world_model, policy_cfg).to(device=device)
-    model.keep_policy_modules_fp32()
-    result = model.world_model.load_state_dict(payload["model"], strict=False)
-    bad_missing = [key for key in result.missing_keys if not key.startswith("backbone.latent_encoder.")]
-    if bad_missing or result.unexpected_keys:
-        raise RuntimeError(
-            f"world checkpoint mismatch: missing={bad_missing[:20]} unexpected={result.unexpected_keys[:20]}"
-        )
-    model.policy_head.load_state_dict(payload["single_action_policy_head"], strict=True)
-    model.eval()
-    return model, payload
+    assembly = build_model(
+        "stage3_single_action_checkpoint",
+        checkpoint=checkpoint,
+        device=device,
+        dtype=dtype,
+        training=False,
+        require_policy_head=True,
+    )
+    model = assembly.model
+    if not isinstance(model, SingleActionStage3Model) or assembly.source_payload is None:
+        raise TypeError(type(model))
+    return model, assembly.source_payload
 
 
 def clone_data_config(payload: dict[str, Any], *, seed: int) -> R2RStage3DataConfig:
-    cfg = make_dataclass(R2RStage3DataConfig, payload)
+    cfg = r2r_data_config_from_dict(payload)
     cfg.action_horizon = 1
     cfg.batch_size = 1
     cfg.action_oversample_mode = "none"
@@ -107,9 +86,15 @@ def make_builder(
 ) -> tuple[R2RStage3PolicyBatchBuilder, R2RStage3DataConfig]:
     cfg = clone_data_config(payload, seed=seed)
     if mode == "natural":
-        return R2RStage3PolicyBatchBuilder(cfg), cfg
+        builder = build_data_loader("stage3_r2r_natural", config=cfg)
+        if not isinstance(builder, R2RStage3PolicyBatchBuilder):
+            raise TypeError(type(builder))
+        return builder, cfg
     if mode == "balanced":
-        return BalancedSingleActionR2RBatchBuilder(cfg), cfg
+        builder = build_data_loader("stage3_r2r_balanced_single_action", config=cfg)
+        if not isinstance(builder, BalancedSingleActionR2RBatchBuilder):
+            raise TypeError(type(builder))
+        return builder, cfg
     raise ValueError(mode)
 
 

@@ -26,11 +26,15 @@ from torch.utils.tensorboard import SummaryWriter
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from nav.v1.stage2_final import (  # noqa: E402
+from nav.v1.data import (  # noqa: E402
     FinalStage2BatchBuilder,
     FinalStage2DataConfig,
+    build_data_loader,
+)
+from nav.v1.model import (  # noqa: E402
     FinalStage2WanConfig,
     FinalStage2WanModel,
+    build_model,
 )
 
 
@@ -280,9 +284,19 @@ def main() -> None:
         pose_head_type=args.pose_head_type,
         pose_readout_layer=args.pose_readout_layer,
     )
-    builder = FinalStage2BatchBuilder(data_cfg)
-    model = FinalStage2WanModel(model_cfg)
-    wan_audit = model.load_wan_checkpoint(args.checkpoint)
+    builder = build_data_loader("stage2_mixed_video", config=data_cfg)
+    if not isinstance(builder, FinalStage2BatchBuilder):
+        raise TypeError(type(builder))
+    model_assembly = build_model(
+        "stage2_wan_init",
+        config=model_cfg,
+        checkpoint=args.checkpoint,
+        training=True,
+    )
+    model = model_assembly.model
+    if not isinstance(model, FinalStage2WanModel):
+        raise TypeError(type(model))
+    wan_audit = model_assembly.audit
     preflight = {
         "event": "stage2_final_cotrain_preflight",
         "time": now(),

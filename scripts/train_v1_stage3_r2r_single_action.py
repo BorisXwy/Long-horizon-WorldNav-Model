@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass
 import json
 import os
 from pathlib import Path
@@ -28,17 +28,18 @@ from torch.utils.tensorboard import SummaryWriter
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from nav.v1.stage2_final import (  # noqa: E402
+from nav.v1.data import (  # noqa: E402
+    ACTION_NAMES,
+    BalancedSingleActionR2RBatchBuilder,
     FinalStage2BatchBuilder,
     FinalStage2DataConfig,
-    FinalStage2WanConfig,
-    FinalStage2WanModel,
+    R2RStage3DataConfig,
+    build_data_loader,
+    stage2_data_config_from_dict,
 )
-from nav.v1.stage3_r2r import ACTION_NAMES, R2RStage3DataConfig  # noqa: E402
-from nav.v1.stage3_single_action import (  # noqa: E402
-    BalancedSingleActionR2RBatchBuilder,
-    SingleActionPolicyConfig,
+from nav.v1.model import (  # noqa: E402
     SingleActionStage3Model,
+    build_model,
 )
 
 
@@ -104,45 +105,6 @@ def install_non_reentrant_wan_checkpoint() -> None:
         return module(*args, **kwargs)
 
     dit_model_module.auto_grad_checkpoint = checkpoint_module
-
-
-def make_dataclass(cls, payload: dict[str, Any]):
-    allowed = {field.name for field in fields(cls)}
-    clean = {key: value for key, value in payload.items() if key in allowed}
-    for key in (
-        "manifest",
-        "latent_root",
-        "text_empty",
-        "text_cache_root",
-        "re10k_camera_root",
-        "latent_manifest_dir",
-        "rendered_manifest",
-    ):
-        if key in clean:
-            clean[key] = Path(clean[key])
-    if cls is FinalStage2WanConfig and "register_condition_grid" in clean:
-        clean["register_condition_grid"] = tuple(clean["register_condition_grid"])
-    return cls(**clean)
-
-
-def load_stage2_world(
-    checkpoint: Path,
-    *,
-    device: torch.device,
-    dtype: torch.dtype,
-) -> tuple[FinalStage2WanModel, dict[str, Any]]:
-    payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
-    cfg = make_dataclass(FinalStage2WanConfig, payload["model_config"])
-    model = FinalStage2WanModel(cfg)
-    model.remove_hmpc()
-    result = model.load_state_dict(payload["model"], strict=False)
-    bad_missing = [key for key in result.missing_keys if not key.startswith("backbone.latent_encoder.")]
-    if bad_missing or result.unexpected_keys:
-        raise RuntimeError(
-            f"Stage2 checkpoint mismatch: missing={bad_missing[:20]} unexpected={result.unexpected_keys[:20]}"
-        )
-    model._freeze_unused_action_output_heads()
-    return model.to(device=device, dtype=dtype).train(), payload
 
 
 def save_checkpoint(
@@ -221,18 +183,31 @@ def main() -> None:
     run_dir = args.output_root / args.run_name
     run_dir.mkdir(parents=True, exist_ok=False)
 
-    world_model, source_ckpt = load_stage2_world(args.checkpoint, device=device, dtype=dtype)
-    policy_cfg = SingleActionPolicyConfig(hidden_dim=world_model.cfg.hidden_dim)
-    model = SingleActionStage3Model(world_model, policy_cfg).to(device=device)
-    model.keep_policy_modules_fp32()
+    model_assembly = build_model(
+        "stage3_single_action_checkpoint",
+        checkpoint=args.checkpoint,
+        device=device,
+        dtype=dtype,
+        training=True,
+    )
+    model = model_assembly.model
+    if not isinstance(model, SingleActionStage3Model):
+        raise TypeError(type(model))
+    world_model = model.world_model
+    source_ckpt = model_assembly.source_payload
+    if source_ckpt is None:
+        raise RuntimeError("Stage3 assembly did not return its Stage2 source payload")
+    policy_cfg = model.cfg
 
     source_data_payload = source_ckpt.get("data_config") or source_ckpt.get("stage2_replay_data_config")
     if source_data_payload is None:
         raise RuntimeError("source Stage2 checkpoint has no data_config")
-    stage2_data_cfg = make_dataclass(FinalStage2DataConfig, source_data_payload)
+    stage2_data_cfg = stage2_data_config_from_dict(source_data_payload)
     stage2_data_cfg.batch_size = args.batch_size
     stage2_data_cfg.seed = args.seed + 1000
-    replay_builder = FinalStage2BatchBuilder(stage2_data_cfg)
+    replay_builder = build_data_loader("stage2_mixed_video", config=stage2_data_cfg)
+    if not isinstance(replay_builder, FinalStage2BatchBuilder):
+        raise TypeError(type(replay_builder))
     r2r_data_cfg = R2RStage3DataConfig(
         latent_manifest_dir=args.latent_manifest_dir,
         rendered_manifest=args.rendered_manifest,
@@ -246,10 +221,13 @@ def main() -> None:
         action_oversample_mode="none",
         seed=args.seed,
     )
-    r2r_builder = BalancedSingleActionR2RBatchBuilder(
-        r2r_data_cfg,
+    r2r_builder = build_data_loader(
+        "stage3_r2r_balanced_single_action",
+        config=r2r_data_cfg,
         history_action_horizon=policy_cfg.history_action_horizon,
     )
+    if not isinstance(r2r_builder, BalancedSingleActionR2RBatchBuilder):
+        raise TypeError(type(r2r_builder))
 
     train_cfg = TrainConfig(
         run_name=args.run_name,

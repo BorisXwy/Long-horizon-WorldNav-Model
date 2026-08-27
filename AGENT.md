@@ -128,6 +128,22 @@ stage2 probe sweep: add frozen-backbone layer probes and docs
 5. 若代码、日志或旧 smoke 中仍出现 `DualStreamBackbone` / 独立 action expert，
    必须标为 `Superseded by DEC-041`，不得继续开正式训练。
 
+## V1 源代码模块化规则
+
+1. 当前 canonical 模型定义位于 `src/nav/v1/model/`：组件类分别放入
+   `world_model.py`、`policy.py` 等模块，最终构图统一由 `builder.py` 的
+   `build_model()` 完成。训练和推理脚本不得重复 checkpoint 恢复或模型组装逻辑。
+2. 当前 canonical 数据定义位于 `src/nav/v1/data/`：dataset/window 逻辑放在
+   `stage2.py`、`r2r.py` 等模块，采样策略放在 `sampler.py`，最终由
+   `loader.py` 的 `build_data_loader()` 组装。脚本不得内联复制 sampler/loader。
+3. 新 ablation 应新增或注册独立 assembler、module、loader 或 sampler，再通过
+   名称组合；不得在一个训练脚本中持续叠加条件分支，导致正式构图随脚本漂移。
+4. `src/nav/v1/stage2_final/`、`stage3_r2r.py`、`stage3_single_action.py` 是旧路径
+   compatibility shim，只允许重导出 canonical 类，不得再加入新实现。
+5. 纯目录重构不得改变默认 config、数据 window/sampling、张量形状、forward、loss、
+   state_dict key 或 checkpoint payload。重构验收至少包含真实 loader 逐张量对照、
+   正式 checkpoint 严格兼容加载和完整 Wan 前向数值对照。
+
 ## 内容边界
 
 - 原始运行日志写入 `NAV/log/`。

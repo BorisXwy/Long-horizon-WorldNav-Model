@@ -14,7 +14,6 @@ the complete final model path:
 from __future__ import annotations
 
 import argparse
-from dataclasses import fields
 import json
 import os
 from pathlib import Path
@@ -30,7 +29,8 @@ INF_WORLD_ROOT = Path(os.environ.get("NAV_INF_WORLD_ROOT", str(ROOT.parent / "In
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(INF_WORLD_ROOT))
 
-from nav.v1.stage2_final import FinalStage2BatchBuilder, FinalStage2DataConfig, FinalStage2WanConfig, FinalStage2WanModel  # noqa: E402
+from nav.v1.data import FinalStage2BatchBuilder, build_data_loader, stage2_data_config_from_checkpoint  # noqa: E402
+from nav.v1.model import FinalStage2WanModel, build_model  # noqa: E402
 
 
 def now() -> str:
@@ -47,44 +47,18 @@ def torch_dtype(name: str) -> torch.dtype:
     raise ValueError(name)
 
 
-def make_dataclass(cls, payload: dict[str, Any]):
-    allowed = {f.name for f in fields(cls)}
-    clean = {k: v for k, v in payload.items() if k in allowed}
-    for key in ("manifest", "latent_root", "text_empty", "text_cache_root", "re10k_camera_root"):
-        if key in clean:
-            clean[key] = Path(clean[key])
-    if cls is FinalStage2WanConfig and "register_condition_grid" in clean:
-        clean["register_condition_grid"] = tuple(clean["register_condition_grid"])
-    return cls(**clean)
-
-
 def load_model(checkpoint: Path, device: torch.device, dtype: torch.dtype) -> tuple[FinalStage2WanModel, dict[str, Any]]:
-    ckpt = torch.load(checkpoint, map_location="cpu", weights_only=False)
-    cfg = make_dataclass(FinalStage2WanConfig, ckpt["model_config"])
-    model = FinalStage2WanModel(cfg)
-    # Training checkpoints are saved after ``load_wan_checkpoint()``, which
-    # replaces HPMC/latent_encoder with Identity.  Recreate that runtime state
-    # before loading model weights.
-    model.remove_hmpc()
-    result = model.load_state_dict(ckpt["model"], strict=False)
-    bad_missing = [key for key in result.missing_keys if not key.startswith("backbone.latent_encoder.")]
-    if bad_missing or result.unexpected_keys:
-        raise RuntimeError(
-            "Stage2 final checkpoint mismatch: "
-            f"missing={bad_missing[:20]} unexpected={result.unexpected_keys[:20]}"
-        )
-    return model.to(device=device, dtype=dtype).eval(), ckpt
-
-
-def stage2_data_payload(ckpt: dict[str, Any]) -> dict[str, Any]:
-    """Read the shared video/3D replay config from Stage2 or Stage3 checkpoints."""
-
-    payload = ckpt.get("data_config")
-    if payload is None:
-        payload = ckpt.get("stage2_replay_data_config")
-    if payload is None:
-        raise RuntimeError("checkpoint has neither data_config nor stage2_replay_data_config")
-    return payload
+    assembly = build_model(
+        "stage2_checkpoint",
+        checkpoint=checkpoint,
+        device=device,
+        dtype=dtype,
+        training=False,
+    )
+    model = assembly.model
+    if not isinstance(model, FinalStage2WanModel) or assembly.source_payload is None:
+        raise TypeError(type(model))
+    return model, assembly.source_payload
 
 
 def load_wan_vae(device: torch.device) -> Any:
@@ -306,7 +280,7 @@ def main() -> None:
     torch.manual_seed(args.eval_seed)
     if device.type == "cuda":
         torch.cuda.manual_seed_all(args.eval_seed)
-    data_cfg = make_dataclass(FinalStage2DataConfig, stage2_data_payload(ckpt))
+    data_cfg = stage2_data_config_from_checkpoint(ckpt)
     data_cfg.batch_size = args.batch_size
     data_cfg.seed = args.eval_seed
     data_cfg.empty_hist_prob = 0.0
@@ -315,7 +289,9 @@ def main() -> None:
         data_cfg.dataset_weights = args.dataset_weights
     if args.history_iw_chunks:
         data_cfg.history_iw_chunks = args.history_iw_chunks
-    builder = FinalStage2BatchBuilder(data_cfg)
+    builder = build_data_loader("stage2_mixed_video", config=data_cfg)
+    if not isinstance(builder, FinalStage2BatchBuilder):
+        raise TypeError(type(builder))
     run_name = args.run_name or f"{args.checkpoint.parent.parent.name}_{args.checkpoint.stem}_eval"
     output_dir = args.output_root / run_name
     output_dir.mkdir(parents=True, exist_ok=True)
