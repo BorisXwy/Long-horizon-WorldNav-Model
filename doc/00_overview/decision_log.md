@@ -5,7 +5,7 @@
 | 文档 ID | `NAV-OVR-002` |
 | 类型 | 决策日志（Decision Log） |
 | 状态 | Live |
-| 更新时间 | 2026-08-27 |
+| 更新时间 | 2026-08-28 |
 | 职责 | 记录会影响模型、数据、训练或评测口径的已确认决策 |
 
 ## 决策表
@@ -48,9 +48,31 @@
 | DEC-044 | 2026-08-22 | Accepted / Operational Rule Updated | 为避免公共 `/sharedata` 被训练 latent 挤满，原始数据和 simulator assets 继续放在 `/sharedata`，但新的训练用 latent / tensor cache 真实落盘位置改为 `NAV/data/train/<dataset>/<latent_run>/`。`/sharedata/NAV/derived/` 只保留历史遗留、预算 manifest、轻量索引和必要临时 render 中间态。 |
 | DEC-045 | 2026-08-25 | Accepted / Code Updated / Training Pending | Stage3 R2R policy 通过在 dataloader 内复制包含较多 TURN/STOP target 的真实 window 改善动作分布，loss 保持普通 CE；正式 accuracy eval 仍默认使用不复制的 natural R2R window 分布。新 Stage3 必须从 Stage2 step2600 初始化，替代已出现 MOVE collapse 的 step1600-init run。 |
 | DEC-046 | 2026-08-25 | Accepted / Code Updated / Training Pending | Stage3 只替换 backbone 之后的离散 action readout：加载完整 Stage2 step2600 后，从 Wan 最后一层现有 action-output slots 读取 `[B,10,1536]` hidden，经 fresh `Linear(1536,144)` 输出 combo logits。backbone 之前及内部的输入、A_noise/timestep、token layout 和 mask 全部不变；旧 flow output heads 冻结且不进入 loss。 |
-| DEC-047 | 2026-08-27 | Accepted / Code Updated / Running | Stage3 R2R 的每个 policy target 必须读取从 episode 起点到当前 `Z_obs` 之前的完整前缀：所有样本满足 `start_micro=0`、`history_micro=obs_micro`，完整前缀只通过固定大小 Register recurrent update 压缩，不向 Wan 拼接原始历史 token。当前对照保持 step3400 初始化、四类均衡 CE、visual/pose replay 与 EBS16 不变；GPU0 实测 `micro=2 × accum=8` 在 AdamW state 建立后的第 2 步 OOM，正式任务采用稳定的 `micro=1 × accum=16`。首个空历史 target 暂按现有任务口径不采样。 |
+| DEC-047 | 2026-08-27 | Superseded by DEC-052 / Stopped at step 148 | Stage3 R2R 的每个 policy target 必须读取从 episode 起点到当前 `Z_obs` 之前的完整前缀：所有样本满足 `start_micro=0`、`history_micro=obs_micro`，完整前缀只通过固定大小 Register recurrent update 压缩，不向 Wan 拼接原始历史 token。原实验保持四类均衡 one-step CE；`micro=2 × accum=8` OOM 后改用 `micro=1 × accum=16`。完整历史语义继续保留，但 one-step 均衡采样口径由 DEC-052 覆盖。 |
+| DEC-052 | 2026-08-28 | Accepted / Code Updated / Training Pending | 正式 Stage3 R2R 改为 `action_chunk=4`，但 backbone 永远保留 Stage2 的 10 个 action token。`H` 只控制读取和监督前 H 个 hidden：H=4 时前 4 个 hidden 分别经共享四分类 MLP，loss 为四个位置的平均 CE；后 6 个 token 仍参与原 backbone 前向但不读出、不监督。训练 window 按自然分布 shuffle、无放回遍历，不做类别均衡、复制或 class weight。完整 episode prefix/Register 语义、Stage2 visual/pose replay、EBS16 和 step3400 初始化均不变。原 full-history balanced one-step run 在 step148 停止；此前短窗口 balanced one-step 对照继续运行。 |
 
 ## 记录要求
+
+### DEC-052 补充（2026-08-28）
+
+- **动作目标**：`H_action=4`，target shape 为 `[B,4]`；第 `h` 个 slot
+  监督 `label_start_action+h` 的真实离散动作。若 chunk 内遇到 episode 的首个
+  `STOP`，该位置及其后续 padding 均为 `STOP`。
+- **输入/输出**：输入侧始终保留 Stage2 的 10 个确定性 zero-noise、
+  zero-timestep action query slots，backbone 输出 `[B,10,1536]`。当 `H=4` 时只取
+  `hidden[:,0:4,:]`，由同一个 FP32 MLP 逐位置输出 `[B,4,4]` logits；后 6 个
+  hidden 不读出、不计算 loss。禁止增加 `10→4` 跨槽位 temporal projector，
+  `H` 的变化不得改变 backbone token layout。Stage2 checkpoint 的
+  Wan/Register/video/pose/action-token 输入权重原样继承，policy MLP 随机初始化。
+- **采样**：一个 episode 中每个有效 `Z_obs` 只构造一个 full-prefix window；所有
+  unique windows 每个 epoch shuffle 后无放回遍历。不再按 STOP/MOVE/LEFT/RIGHT
+  做 cyclic balance，不复制 TURN/STOP 样本，也不使用 class weight。
+- **运行状态**：被替代的
+  `stage3_r2r_fullhistory_mb1_ebs16_from_stage2step3400_2k_20260827`
+  已在 step148 停止；旧短窗口对照
+  `stage3_r2r_single_action_balanced_from_stage2step3400_2k_20260826`
+  保持运行。新 H4 正式入口已配置但未自动启动：
+  `scripts/run_v1_stage3_r2r_full_history_ebs16.sh`。
 
 ### DEC-046 补充（2026-08-25）
 

@@ -4,7 +4,7 @@ set -euo pipefail
 NAV_ROOT=/mnt/pool1/sharehome/xiewenyuan/academic/3d_wm_vln/NAV
 INF_WORLD_ROOT=/mnt/pool1/sharehome/xiewenyuan/academic/3d_wm_vln/Infinite-World
 PYTHON_BIN=/mnt/pool1/sharehome/xiewenyuan/academic/3d_wm_vln/virtual_env/.venv_infinite_world/bin/python
-RUN_NAME=${1:-stage3_r2r_fullhistory_mb1_ebs16_from_stage2step3400_2k_20260827}
+RUN_NAME=${1:-stage3_r2r_fullhistory_natural_a4_mb1_ebs16_from_stage2step3400_2k_20260828}
 GPU_INDEX=${GPU_INDEX:-0}
 TENSORBOARD_PORT=${TENSORBOARD_PORT:-6040}
 
@@ -30,5 +30,6 @@ CUDA_VISIBLE_DEVICES="$GPU_INDEX" "$PYTHON_BIN" scripts/train_v1_stage3_r2r_sing
   --log-every 1 \
   --seed 20260826 \
   --checkpoint log/v1_stage2_final_cotrain/stage2_from_step3000_continue_lr2e6_1k_20260825/checkpoints/step_003400.pt \
-  --r2r-loader stage3_r2r_full_history_balanced_single_action \
+  --action-chunk 4 \
+  --r2r-loader stage3_r2r_full_history_natural_action_chunk \
   --tensorboard-port "$TENSORBOARD_PORT"

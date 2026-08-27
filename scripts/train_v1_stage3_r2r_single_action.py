@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Train the full V1 model on a balanced one-step R2R policy target.
+"""Train the full V1 model on a discrete R2R action target.
 
 The video/Register/pose path is the complete current Stage2 implementation.
-The diagnostic change is deliberately narrow: one deterministic action query
-is read from the final shared Wan hidden and decoded by an FP32 four-class MLP.
-R2R minority classes are sampled with replacement in an exact four-class
-cycle, while Stage2 visual/pose replay remains enabled.
+The policy path reads one or more deterministic action-query hiddens from the
+final shared Wan layer and decodes every query with the same FP32 four-class
+MLP.  Both the historical balanced one-step protocol and the formal
+full-history/natural-distribution action-chunk protocol remain addressable.
 """
 
 from __future__ import annotations
@@ -34,11 +34,13 @@ from nav.v1.data import (  # noqa: E402
     FinalStage2BatchBuilder,
     FinalStage2DataConfig,
     FullHistoryBalancedSingleActionR2RBatchBuilder,
+    FullHistoryNaturalActionChunkR2RBatchBuilder,
     R2RStage3DataConfig,
     build_data_loader,
     stage2_data_config_from_dict,
 )
 from nav.v1.model import (  # noqa: E402
+    SingleActionPolicyConfig,
     SingleActionStage3Model,
     build_model,
 )
@@ -62,6 +64,7 @@ class TrainConfig:
     grad_accum: int
     effective_batch_size: int
     r2r_loader: str
+    action_chunk: int
     backbone_lr: float
     policy_lr: float
     weight_decay: float
@@ -160,11 +163,13 @@ def main() -> None:
     parser.add_argument("--output-root", type=Path, default=ROOT / "log/v1_stage3_r2r_single_action")
     parser.add_argument("--tensorboard-port", type=int, default=6039)
     parser.add_argument("--history-micro-choices", default="1,2,3,4,5,6,7")
+    parser.add_argument("--action-chunk", type=int, default=1)
     parser.add_argument(
         "--r2r-loader",
         choices=(
             "stage3_r2r_balanced_single_action",
             "stage3_r2r_full_history_balanced_single_action",
+            "stage3_r2r_full_history_natural_action_chunk",
         ),
         default="stage3_r2r_balanced_single_action",
     )
@@ -177,9 +182,19 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.batch_size * args.grad_accum != 16:
-        raise SystemExit("single-action Stage3 requires effective batch size = 16")
-    if (args.batch_size * args.grad_accum) % 4 != 0:
+        raise SystemExit("Stage3 requires effective batch size = 16")
+    if not 1 <= args.action_chunk <= 10:
+        raise SystemExit("action chunk must be in [1, 10], matching the shared action-token capacity")
+    balanced_loader = args.r2r_loader in {
+        "stage3_r2r_balanced_single_action",
+        "stage3_r2r_full_history_balanced_single_action",
+    }
+    if balanced_loader and (args.batch_size * args.grad_accum) % 4 != 0:
         raise SystemExit("effective batch size must be divisible by 4 for exact per-step class balance")
+    if balanced_loader and args.action_chunk != 1:
+        raise SystemExit("historical balanced loaders only support action chunk = 1")
+    if args.r2r_loader == "stage3_r2r_full_history_natural_action_chunk" and args.action_chunk != 4:
+        raise SystemExit("formal full-history natural loader requires action chunk = 4")
     os.environ.setdefault("NAV_INF_WORLD_ROOT", str(ROOT.parent / "Infinite-World"))
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -191,9 +206,16 @@ def main() -> None:
     run_dir = args.output_root / args.run_name
     run_dir.mkdir(parents=True, exist_ok=False)
 
+    policy_cfg_override = SingleActionPolicyConfig(
+        hidden_dim=1536,
+        policy_queries=args.action_chunk,
+        backbone_action_tokens=(1 if balanced_loader else 10),
+        sampler=("balanced_class_cycle" if balanced_loader else "natural_window_no_balance"),
+    )
     model_assembly = build_model(
         "stage3_single_action_checkpoint",
         checkpoint=args.checkpoint,
+        policy_config=policy_cfg_override,
         device=device,
         dtype=dtype,
         training=True,
@@ -222,7 +244,7 @@ def main() -> None:
         text_empty=stage2_data_cfg.text_empty,
         text_cache_root=args.r2r_text_cache_root,
         history_micro_choices=args.history_micro_choices,
-        action_horizon=1,
+        action_horizon=args.action_chunk,
         batch_size=args.batch_size,
         require_text_cache=not args.allow_empty_text_fallback,
         max_episodes=args.max_r2r_episodes,
@@ -233,10 +255,15 @@ def main() -> None:
         args.r2r_loader,
         config=r2r_data_cfg,
         history_action_horizon=policy_cfg.history_action_horizon,
+        model_action_horizon=policy_cfg.backbone_action_tokens,
     )
     if not isinstance(
         r2r_builder,
-        (BalancedSingleActionR2RBatchBuilder, FullHistoryBalancedSingleActionR2RBatchBuilder),
+        (
+            BalancedSingleActionR2RBatchBuilder,
+            FullHistoryBalancedSingleActionR2RBatchBuilder,
+            FullHistoryNaturalActionChunkR2RBatchBuilder,
+        ),
     ):
         raise TypeError(type(r2r_builder))
 
@@ -249,6 +276,7 @@ def main() -> None:
         grad_accum=args.grad_accum,
         effective_batch_size=args.batch_size * args.grad_accum,
         r2r_loader=args.r2r_loader,
+        action_chunk=args.action_chunk,
         backbone_lr=args.backbone_lr,
         policy_lr=args.policy_lr,
         weight_decay=args.weight_decay,
@@ -264,7 +292,11 @@ def main() -> None:
     )
     fast_parameters = model.policy_fast_parameters()
     backbone_parameters = model.backbone_parameters()
-    full_history_mode = isinstance(r2r_builder, FullHistoryBalancedSingleActionR2RBatchBuilder)
+    full_history_mode = isinstance(
+        r2r_builder,
+        (FullHistoryBalancedSingleActionR2RBatchBuilder, FullHistoryNaturalActionChunkR2RBatchBuilder),
+    )
+    natural_action_chunk_mode = isinstance(r2r_builder, FullHistoryNaturalActionChunkR2RBatchBuilder)
     preflight = {
         "event": "stage3_r2r_single_action_preflight",
         "time": now(),
@@ -296,10 +328,20 @@ def main() -> None:
                 "existing T4 K=1..7 sampled Register rollout",
             ),
             "z_obs": "existing current T4 micro chunk; temporal alignment intentionally unchanged",
-            "target": "one primitive at label_start=obs_micro*12+12",
-            "balance": "logical copy via exact STOP/MOVE/LEFT/RIGHT cyclic sampling",
+            "target": (
+                f"{args.action_chunk} consecutive future primitives starting at "
+                "label_start=obs_micro*12+12"
+            ),
+            "balance": (
+                "natural shuffled window traversal; no class balancing or sample duplication"
+                if natural_action_chunk_mode
+                else "logical copy via exact STOP/MOVE/LEFT/RIGHT cyclic sampling"
+            ),
         },
-        "loss": "L = CE_4(next_action) + lambda_video_replay * L_visual + lambda_pose_replay * L_pose",
+        "loss": (
+            f"L = mean_h CE_4(action[h]), H={args.action_chunk} + "
+            "lambda_video_replay * L_visual + lambda_pose_replay * L_pose"
+        ),
     }
     write_json(run_dir / "formal_preflight.json", preflight)
     write_json(

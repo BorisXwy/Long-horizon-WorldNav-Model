@@ -1,4 +1,4 @@
-"""Single-action policy modules assembled on the shared V1 world model."""
+"""Discrete action-chunk policy modules assembled on the shared V1 world model."""
 
 from __future__ import annotations
 
@@ -19,16 +19,23 @@ class SingleActionPolicyConfig:
     mlp_dim: int = 512
     num_classes: int = 4
     policy_queries: int = 1
+    backbone_action_tokens: int | None = None
     history_action_horizon: int = 10
     sampler: str = "balanced_class_cycle"
     action_query_input: str = "zero_noise_zero_timestep"
+
+    def __post_init__(self) -> None:
+        if self.backbone_action_tokens is None:
+            self.backbone_action_tokens = self.policy_queries
+        if self.backbone_action_tokens < self.policy_queries:
+            raise ValueError("backbone_action_tokens must be >= policy_queries")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
 class SingleActionPolicyHead(nn.Module):
-    """Read one final Wan action hidden and return four primitive logits."""
+    """Decode each selected final Wan action hidden into four primitive logits."""
 
     def __init__(self, cfg: SingleActionPolicyConfig) -> None:
         super().__init__()
@@ -39,9 +46,12 @@ class SingleActionPolicyHead(nn.Module):
         self.proj_out = nn.Linear(cfg.mlp_dim, cfg.num_classes)
 
     def forward(self, hidden: torch.Tensor) -> torch.Tensor:
-        if hidden.ndim != 3 or hidden.shape[1] < self.cfg.policy_queries:
-            raise ValueError(f"expected action hidden [B,>=1,C], got {tuple(hidden.shape)}")
-        hidden = hidden[:, : self.cfg.policy_queries].float()
+        if hidden.ndim != 3 or hidden.shape[1] < self.cfg.backbone_action_tokens:
+            raise ValueError(
+                f"expected action hidden [B,>={self.cfg.backbone_action_tokens},C], got {tuple(hidden.shape)}"
+            )
+        hidden = hidden[:, : self.cfg.backbone_action_tokens].float()
+        hidden = hidden[:, : self.cfg.policy_queries]
         return self.proj_out(self.act(self.proj_in(self.norm(hidden))))
 
 
@@ -86,9 +96,9 @@ class SingleActionStage3Model(nn.Module):
             include_current_action_condition=False,
         )
         hidden = out.get("shared_action_hidden")
-        if hidden is None or hidden.shape[1] != self.cfg.policy_queries:
+        if hidden is None or hidden.shape[1] != self.cfg.backbone_action_tokens:
             raise RuntimeError(
-                f"single-action policy requires exactly one shared action hidden, got "
+                f"policy requires exactly {self.cfg.backbone_action_tokens} shared action hidden tokens, got "
                 f"{None if hidden is None else tuple(hidden.shape)}"
             )
         logits = self.policy_head(hidden)
@@ -109,8 +119,14 @@ class SingleActionStage3Model(nn.Module):
             "wrapper_class": type(self).__name__,
             "world_model": self.world_model.structural_report(),
             "policy_head": type(self.policy_head).__name__,
-            "policy_hidden_shape": ["B", 1, self.cfg.hidden_dim],
-            "policy_logits_shape": ["B", 1, self.cfg.num_classes],
+            "backbone_action_hidden_shape": ["B", self.cfg.backbone_action_tokens, self.cfg.hidden_dim],
+            "policy_hidden_shape": ["B", self.cfg.policy_queries, self.cfg.hidden_dim],
+            "policy_readout": (
+                f"select hidden slots [0:{self.cfg.policy_queries}] from the unchanged "
+                f"{self.cfg.backbone_action_tokens}-slot backbone, then apply one shared MLP"
+            ),
+            "unused_action_hidden_slots": self.cfg.backbone_action_tokens - self.cfg.policy_queries,
+            "policy_logits_shape": ["B", self.cfg.policy_queries, self.cfg.num_classes],
             "policy_head_parameters": sum(parameter.numel() for parameter in self.policy_head.parameters()),
             "policy_fast_parameter_count": sum(parameter.numel() for parameter in self.policy_fast_parameters()),
             "action_names": {str(key): value for key, value in ACTION_NAMES.items()},

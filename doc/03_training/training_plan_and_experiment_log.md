@@ -5,14 +5,42 @@
 | 文档 ID | `NAV-TRN-010` |
 | 类型 | 训练计划与实验记录总览 |
 | 状态 | Live / Source of Truth |
-| 更新时间 | 2026-08-27 |
+| 更新时间 | 2026-08-28 |
 | 职责 | 集中维护 V1 Stage One/Two/Three 训练变量、loss、数据配比、正式 run、历史 V0 实验和 streaming sample 语义。 |
 
 ## 当前入口结论
 
 当前训练主线：Stage1 训练视频生成记忆与 action/text/interface 格式；Stage2 在同一视频生成范式中加入 3D/Pose hidden supervision；Stage3 加入 VLN policy/action loss，并与 Stage1/Stage2 loss 做比例混合以避免退化。
 
-## 2026-08-27 Stage3 全量历史对照
+## 2026-08-28 Stage3 H4 自然分布协议
+
+正式 Stage3 在 DEC-047 的 full episode prefix/Register 语义上，只替换动作目标与
+采样分布：每个当前 `Z_obs` 预测连续 4 个 future primitive，形成
+`action_class[B,4]`。输入 backbone 的 action slots 始终保持 Stage2 的 10 个；
+最后一层得到 `hidden[B,10,1536]` 后只读取前 4 个，逐位置经共享 FP32 四分类
+MLP 得到 `logits[B,4,4]`，后 6 个 hidden 不读出、不监督。这里没有额外的
+`10→4` temporal projector，action loss 是前 4 个位置的普通 mean CE。
+
+训练 window 使用原始自然分布：所有 unique full-prefix windows 每个 epoch shuffle
+后无放回遍历，不做 TURN/STOP 复制、四类 cyclic balance 或 class weight。Stage2
+visual/pose replay、`micro=1 × accumulation=16`、EBS16、step3400 初始化均保持不变。
+
+运行状态：
+
+```text
+已停止（step 148）：
+  stage3_r2r_fullhistory_mb1_ebs16_from_stage2step3400_2k_20260827
+
+继续运行的历史短窗口对照：
+  stage3_r2r_single_action_balanced_from_stage2step3400_2k_20260826
+
+新协议入口（代码已就绪，本次不自动启动）：
+  scripts/run_v1_stage3_r2r_full_history_ebs16.sh
+  --action-chunk 4
+  --r2r-loader stage3_r2r_full_history_natural_action_chunk
+```
+
+## 2026-08-27 Stage3 全量历史 one-step 均衡对照（已停止）
 
 结论：Stage3 导航样本不再将 Register history 人工截断为随机 `K=1..7` window。
 对每一个被采样的单动作 target，history 必须是该 episode 从起点到当前
