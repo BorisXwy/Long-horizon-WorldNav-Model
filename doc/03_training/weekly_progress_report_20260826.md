@@ -5,7 +5,7 @@
 | 文档 ID | `NAV-TRN-012` |
 | 类型 | 周进展汇报 |
 | 状态 | Completed / Weekly Snapshot |
-| 更新时间 | 2026-08-26（Asia/Shanghai） |
+| 更新时间 | 2026-08-27（Asia/Shanghai） |
 | 统计周期 | 2026-08-19 至 2026-08-26 |
 | 职责 | 归纳本周 Stage2、R2R 数据与 Stage3 policy 主线进展，不替代训练和评测事实总账 |
 
@@ -95,3 +95,24 @@ Stage3 checkpoint 基本保住 pose 能力，但生成 PSNR 相比当时的 Stag
    同时报告 macro recall、四类 recall、instruction/observation ablation，禁止只看 CE。
 3. 若 STOP 高召回、MOVE 低召回持续存在，优先检查 terminal cue、window 对齐和
    条件利用情况，再决定是否调整 loss 或模型结构。
+
+## 2026-08-27 checkpoint 评测补充
+
+Stage2 已训练至 step4400。最新 checkpoint 在 4 个混合样本的 30-step full
+denoise 上得到平均 PSNR `23.16 dB`，在 64 个 RE10K pose 窗口上得到 pose MSE
+`0.002746`、translation MAE `0.03557`、rotation error `6.31°`。与 step3400
+进行同样本、同噪声对照后，full-denoise PSNR 仅提升 `0.039 dB`，因此当前结论是
+继续训练保持稳定并略有改善，而不是显著提升。
+
+Stage3 最新已保存的 step800 在四类严格均衡 R2R teacher-forced open-loop
+评测上得到 accuracy/macro recall `39.84%`，高于 `25%` 随机基线；但在自然
+R2R 分布上 accuracy 仅 `15.63%`，远低于 `75.78%` 的多数类基线。均衡集的
+MOVE_FORWARD recall 只有 `6.25%`，且打乱 instruction 只改变 `3.91%` 的
+top-1 预测，说明 policy 尚不可用，主要问题已从“是否超过随机”收敛为动作类别
+偏置和条件利用不足。
+
+将 Stage3 step800 与其来源 Stage2 step3400 做配对 replay 后，30-step 生成 PSNR
+只变化 `-0.013 dB`，visual/latent one-step 指标也基本不变；pose MSE 反而下降
+约 `13%`。因此本轮没有观察到生成或 3D catastrophic forgetting。完整协议、
+混淆矩阵、视频路径与结论边界见
+`result/v1_stage2_stage3_comparison/latest_step4400_step800_20260827/report.md`。
