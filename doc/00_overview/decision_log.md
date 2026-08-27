@@ -49,7 +49,7 @@
 | DEC-045 | 2026-08-25 | Accepted / Code Updated / Training Pending | Stage3 R2R policy 通过在 dataloader 内复制包含较多 TURN/STOP target 的真实 window 改善动作分布，loss 保持普通 CE；正式 accuracy eval 仍默认使用不复制的 natural R2R window 分布。新 Stage3 必须从 Stage2 step2600 初始化，替代已出现 MOVE collapse 的 step1600-init run。 |
 | DEC-046 | 2026-08-25 | Accepted / Code Updated / Training Pending | Stage3 只替换 backbone 之后的离散 action readout：加载完整 Stage2 step2600 后，从 Wan 最后一层现有 action-output slots 读取 `[B,10,1536]` hidden，经 fresh `Linear(1536,144)` 输出 combo logits。backbone 之前及内部的输入、A_noise/timestep、token layout 和 mask 全部不变；旧 flow output heads 冻结且不进入 loss。 |
 | DEC-047 | 2026-08-27 | Superseded by DEC-052 / Stopped at step 148 | Stage3 R2R 的每个 policy target 必须读取从 episode 起点到当前 `Z_obs` 之前的完整前缀：所有样本满足 `start_micro=0`、`history_micro=obs_micro`，完整前缀只通过固定大小 Register recurrent update 压缩，不向 Wan 拼接原始历史 token。原实验保持四类均衡 one-step CE；`micro=2 × accum=8` OOM 后改用 `micro=1 × accum=16`。完整历史语义继续保留，但 one-step 均衡采样口径由 DEC-052 覆盖。 |
-| DEC-052 | 2026-08-28 | Accepted / Code Updated / Training Pending | 正式 Stage3 R2R 改为 `action_chunk=4`，但 backbone 永远保留 Stage2 的 10 个 action token。`H` 只控制读取和监督前 H 个 hidden：H=4 时前 4 个 hidden 分别经共享四分类 MLP，loss 为四个位置的平均 CE；后 6 个 token 仍参与原 backbone 前向但不读出、不监督。训练 window 按自然分布 shuffle、无放回遍历，不做类别均衡、复制或 class weight。完整 episode prefix/Register 语义、Stage2 visual/pose replay、EBS16 和 step3400 初始化均不变。原 full-history balanced one-step run 在 step148 停止；此前短窗口 balanced one-step 对照继续运行。 |
+| DEC-052 | 2026-08-28 | Accepted / Code Updated / Running | 正式 Stage3 R2R 改为 `action_chunk=4`，但 backbone 永远保留 Stage2 的 10 个 action token。`H` 只控制读取和监督前 H 个 hidden：H=4 时前 4 个 hidden 分别经共享四分类 MLP，loss 为四个位置的平均 CE；后 6 个 token 仍参与原 backbone 前向但不读出、不监督。训练 window 按自然分布 shuffle、无放回遍历，不做类别均衡、复制或 class weight。完整 episode prefix/Register 语义、Stage2 visual/pose replay、EBS16 和 step3400 初始化均不变。原 full-history balanced one-step run 在 step148 停止；此前短窗口 balanced one-step 对照继续运行。 |
 
 ## 记录要求
 
@@ -71,8 +71,11 @@
   `stage3_r2r_fullhistory_mb1_ebs16_from_stage2step3400_2k_20260827`
   已在 step148 停止；旧短窗口对照
   `stage3_r2r_single_action_balanced_from_stage2step3400_2k_20260826`
-  保持运行。新 H4 正式入口已配置但未自动启动：
-  `scripts/run_v1_stage3_r2r_full_history_ebs16.sh`。
+  保持运行。新 H4 正式任务已于 2026-08-28 02:09 在 GPU0 启动，入口为
+  `scripts/run_v1_stage3_r2r_full_history_ebs16.sh`，TensorBoard 端口为 `6040`。
+  首个 optimizer step 用时 140.14 秒，policy CE=1.4363、visual replay=0.1043、
+  pose replay=1.15e-4，CUDA max allocated=28.23 GiB；optimizer state 建立后
+  GPU0 进程总占用约 31.4 GiB，未发生 OOM。
 
 ### DEC-046 补充（2026-08-25）
 

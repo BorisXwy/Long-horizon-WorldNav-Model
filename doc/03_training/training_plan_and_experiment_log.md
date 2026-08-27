@@ -34,11 +34,27 @@ visual/pose replay、`micro=1 × accumulation=16`、EBS16、step3400 初始化�
 继续运行的历史短窗口对照：
   stage3_r2r_single_action_balanced_from_stage2step3400_2k_20260826
 
-新协议入口（代码已就绪，本次不自动启动）：
+新协议正式任务（2026-08-28 02:09 已在 GPU0 启动）：
   scripts/run_v1_stage3_r2r_full_history_ebs16.sh
   --action-chunk 4
   --r2r-loader stage3_r2r_full_history_natural_action_chunk
+
+run:
+  log/v1_stage3_r2r_single_action/
+    stage3_r2r_fullhistory_natural_a4_mb1_ebs16_from_stage2step3400_2k_20260828/
+
+tmux:
+  nav_stage3_fullhist_natural_a4
+  nav_tb_stage3_fullhist
+
+TensorBoard:
+  port 6040
 ```
+
+首个 optimizer step 已验证完整训练链路：140.14 s/step，CUDA max allocated
+28.23 GiB；EBS16 共监督 64 个 action labels，`policy CE=1.4363`、
+`visual replay=0.1043`、`pose replay=1.15e-4`、`grad norm=10.8439`，均为有限值。
+optimizer state 建立后 GPU0 总占用约 31.4 GiB，未发生 OOM。
 
 ## 2026-08-27 Stage3 全量历史 one-step 均衡对照（已停止）
 
