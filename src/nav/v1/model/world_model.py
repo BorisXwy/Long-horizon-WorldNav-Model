@@ -293,6 +293,43 @@ class FinalStage2WanModel(nn.Module):
             )
         return registers
 
+    def roll_register_variable_history(
+        self,
+        history_latents: torch.Tensor,
+        a_hist_combo: torch.Tensor,
+        history_lengths: torch.Tensor,
+    ) -> torch.Tensor:
+        """Roll padded full prefixes without letting padding update Register.
+
+        Each sample is rolled independently so ``register_grad_tail`` remains
+        relative to that sample's real prefix length.  Only the inexpensive
+        recurrent Register path is looped per sample; the shared Wan backbone
+        still receives the complete physical batch in one forward.
+        """
+
+        if history_latents.ndim != 6:
+            raise ValueError(f"expected padded history [B,K,C,T,H,W], got {tuple(history_latents.shape)}")
+        if a_hist_combo.ndim < 3 or a_hist_combo.shape[:2] != history_latents.shape[:2]:
+            raise ValueError(
+                f"history/action prefix mismatch: history={tuple(history_latents.shape)} "
+                f"actions={tuple(a_hist_combo.shape)}"
+            )
+        lengths = history_lengths.detach().to(device="cpu", dtype=torch.long).reshape(-1).tolist()
+        if len(lengths) != history_latents.shape[0]:
+            raise ValueError(f"history_lengths={lengths} batch={history_latents.shape[0]}")
+        registers = []
+        for batch_index, length in enumerate(lengths):
+            length = int(length)
+            if length <= 0 or length > history_latents.shape[1]:
+                raise ValueError(f"invalid history length {length}; padded K={history_latents.shape[1]}")
+            registers.append(
+                self.roll_register(
+                    history_latents[batch_index : batch_index + 1, :length],
+                    a_hist_combo[batch_index : batch_index + 1, :length],
+                )
+            )
+        return torch.cat(registers, dim=0)
+
     def current_obs_hidden(self, prefix_video_hidden: torch.Tensor, z_obs: torch.Tensor) -> torch.Tensor:
         h_tokens = z_obs.shape[-2] // 2
         w_tokens = z_obs.shape[-1] // 2
@@ -325,7 +362,12 @@ class FinalStage2WanModel(nn.Module):
         z_obs = batch["z_obs"].to(dtype)
         z_future_noisy = batch["z_future_noisy"].to(dtype)
         b = z_obs.shape[0]
-        registers = self.roll_register(history, batch["a_hist_combo"].to(device=z_obs.device))
+        a_hist_combo = batch["a_hist_combo"].to(device=z_obs.device)
+        history_lengths = batch.get("history_lengths")
+        if history_lengths is None:
+            registers = self.roll_register(history, a_hist_combo)
+        else:
+            registers = self.roll_register_variable_history(history, a_hist_combo, history_lengths)
         if self.cfg.register_injection == "main_prefix":
             image_cond = torch.cat([registers.to(dtype), z_obs], dim=2)
             register_condition = None

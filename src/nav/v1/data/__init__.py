@@ -20,6 +20,7 @@ from .r2r import (
     trans_rot_to_combo,
     vln_action_to_combo,
 )
+from .r2r_full_history import FullHistoryBalancedSingleActionR2RBatchBuilder
 from .sampler import BalancedSingleActionR2RBatchBuilder
 from .stage2 import FinalStage2BatchBuilder, FinalStage2DataConfig
 
@@ -28,6 +29,7 @@ __all__ = [
     "BalancedSingleActionR2RBatchBuilder",
     "FinalStage2BatchBuilder",
     "FinalStage2DataConfig",
+    "FullHistoryBalancedSingleActionR2RBatchBuilder",
     "MOVE_FORWARD_ACTION",
     "R2RPolicyWindow",
     "R2RStage3DataConfig",

@@ -5,7 +5,7 @@
 | 文档 ID | `NAV-OVR-002` |
 | 类型 | 决策日志（Decision Log） |
 | 状态 | Live |
-| 更新时间 | 2026-08-25 |
+| 更新时间 | 2026-08-27 |
 | 职责 | 记录会影响模型、数据、训练或评测口径的已确认决策 |
 
 ## 决策表
@@ -48,6 +48,7 @@
 | DEC-044 | 2026-08-22 | Accepted / Operational Rule Updated | 为避免公共 `/sharedata` 被训练 latent 挤满，原始数据和 simulator assets 继续放在 `/sharedata`，但新的训练用 latent / tensor cache 真实落盘位置改为 `NAV/data/train/<dataset>/<latent_run>/`。`/sharedata/NAV/derived/` 只保留历史遗留、预算 manifest、轻量索引和必要临时 render 中间态。 |
 | DEC-045 | 2026-08-25 | Accepted / Code Updated / Training Pending | Stage3 R2R policy 通过在 dataloader 内复制包含较多 TURN/STOP target 的真实 window 改善动作分布，loss 保持普通 CE；正式 accuracy eval 仍默认使用不复制的 natural R2R window 分布。新 Stage3 必须从 Stage2 step2600 初始化，替代已出现 MOVE collapse 的 step1600-init run。 |
 | DEC-046 | 2026-08-25 | Accepted / Code Updated / Training Pending | Stage3 只替换 backbone 之后的离散 action readout：加载完整 Stage2 step2600 后，从 Wan 最后一层现有 action-output slots 读取 `[B,10,1536]` hidden，经 fresh `Linear(1536,144)` 输出 combo logits。backbone 之前及内部的输入、A_noise/timestep、token layout 和 mask 全部不变；旧 flow output heads 冻结且不进入 loss。 |
+| DEC-047 | 2026-08-27 | Accepted / Code Updated / Running | Stage3 R2R 的每个 policy target 必须读取从 episode 起点到当前 `Z_obs` 之前的完整前缀：所有样本满足 `start_micro=0`、`history_micro=obs_micro`，完整前缀只通过固定大小 Register recurrent update 压缩，不向 Wan 拼接原始历史 token。当前对照保持 step3400 初始化、四类均衡 CE、visual/pose replay 与 EBS16 不变；GPU0 实测 `micro=2 × accum=8` 在 AdamW state 建立后的第 2 步 OOM，正式任务采用稳定的 `micro=1 × accum=16`。首个空历史 target 暂按现有任务口径不采样。 |
 
 ## 记录要求
 

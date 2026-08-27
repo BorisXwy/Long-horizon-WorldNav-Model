@@ -5,12 +5,82 @@
 | 文档 ID | `NAV-TRN-010` |
 | 类型 | 训练计划与实验记录总览 |
 | 状态 | Live / Source of Truth |
-| 更新时间 | 2026-08-21 |
+| 更新时间 | 2026-08-27 |
 | 职责 | 集中维护 V1 Stage One/Two/Three 训练变量、loss、数据配比、正式 run、历史 V0 实验和 streaming sample 语义。 |
 
 ## 当前入口结论
 
 当前训练主线：Stage1 训练视频生成记忆与 action/text/interface 格式；Stage2 在同一视频生成范式中加入 3D/Pose hidden supervision；Stage3 加入 VLN policy/action loss，并与 Stage1/Stage2 loss 做比例混合以避免退化。
+
+## 2026-08-27 Stage3 全量历史对照
+
+结论：Stage3 导航样本不再将 Register history 人工截断为随机 `K=1..7` window。
+对每一个被采样的单动作 target，history 必须是该 episode 从起点到当前
+`Z_obs` 之前的完整 latent/action 前缀；原始历史仍不进入 Wan token stream，
+只通过固定大小 Register recurrent update 压缩。
+
+本次实现和运行口径：
+
+```text
+source checkpoint:
+  log/v1_stage2_final_cotrain/
+    stage2_from_step3000_continue_lr2e6_1k_20260825/
+      checkpoints/step_003400.pt
+
+R2R data:
+  10,819 encoded/rendered train episodes
+  35,941 full-prefix single-action targets
+  history_micro = 1..14
+  longest full prefix = 169 RGB frames
+  invariant: start_micro=0, history_micro=obs_micro
+  K=0 first-observation target: 暂不采样，与当前 Stage3 任务保持一致
+
+model/loss:
+  与正在运行的短窗口 Stage3 对照保持相同
+  Single shared Wan backbone + Register + Z_obs + instruction + action query
+  L = CE_4 + 0.25 * L_visual_replay + 0.05 * L_pose_replay
+  backbone_lr=2e-6, policy_lr=1e-4
+  四类 target 按 cyclic replacement 精确均衡
+
+batch/runtime:
+  GPU0
+  physical micro batch=1
+  gradient accumulation=16
+  effective batch size=16
+  steps=2,000, save_every=200
+  TensorBoard port=6040
+```
+
+不同长度 prefix 只在 batch transport 时补零；`history_lengths` 控制每个样本
+实际执行的 Register updates。模型分别滚动每个样本的 Register，使
+`register_grad_tail=4` 仍以各自真实前缀末端为基准。该实现不跨 batch 保存场景状态，
+但每个 target 的 Register
+输入都包含完整 episode prefix，因此可与旧 `K=1..7` 截断窗口任务直接对照。
+
+`micro=2 × accum=8` 完成第一个 optimizer step 后，AdamW state 已常驻显存；
+第 2 步在 Stage2 replay backward 中申请额外 92 MiB 时 OOM。报错口径为 GPU0
+总容量 47.40 GiB、进程占用 47.34 GiB、仅余约 40 MiB。因此 micro2 只能作为
+显存校准失败记录，正式全量历史任务回退到 `micro=1 × accum=16`，EBS16 与其余
+训练变量均不改变。
+
+稳定配置首个完整 optimizer step 已验证：141.60 s/step，CUDA max allocated
+28.23 GiB；四类 target 各 4 个，`policy CE=1.39149`、
+`visual replay loss=0.10433`、`pose replay loss=0.000115`、
+`grad norm=2.8113`，均为有限值。该记录只证明完整训练链路和资源配置有效，
+不代表模型已收敛。【已验证→`log/v1_stage3_r2r_single_action/stage3_r2r_fullhistory_mb1_ebs16_from_stage2step3400_2k_20260827/train.jsonl`】
+
+正式入口：
+
+```text
+scripts/run_v1_stage3_r2r_full_history_ebs16.sh
+```
+
+运行记录：
+
+```text
+log/v1_stage3_r2r_single_action/
+  stage3_r2r_fullhistory_mb1_ebs16_from_stage2step3400_2k_20260827/
+```
 
 2026-08-21 更新：针对 `step_002000.pt` 的 pose 误差较大问题，新增
 Stage2 frozen-backbone layer probe sweep。该实验不继续更新 DiT/Register，

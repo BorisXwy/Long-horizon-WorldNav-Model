@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from nav.v1.data.r2r import R2RStage3DataConfig, R2RStage3PolicyBatchBuilder
+from nav.v1.data.r2r_full_history import FullHistoryBalancedSingleActionR2RBatchBuilder
 from nav.v1.data.sampler import BalancedSingleActionR2RBatchBuilder
 from nav.v1.data.stage2 import FinalStage2BatchBuilder, FinalStage2DataConfig
 
@@ -29,11 +30,24 @@ def _stage3_single_action_balanced_loader(
     )
 
 
+def _stage3_single_action_full_history_loader(
+    *,
+    config: R2RStage3DataConfig,
+    history_action_horizon: int = 10,
+    **_: Any,
+) -> FullHistoryBalancedSingleActionR2RBatchBuilder:
+    return FullHistoryBalancedSingleActionR2RBatchBuilder(
+        config,
+        history_action_horizon=history_action_horizon,
+    )
+
+
 DataLoaderFactory = Callable[..., Any]
 _DATA_LOADERS: dict[str, DataLoaderFactory] = {
     "stage2_mixed_video": _stage2_loader,
     "stage3_r2r_natural": _stage3_r2r_loader,
     "stage3_r2r_balanced_single_action": _stage3_single_action_balanced_loader,
+    "stage3_r2r_full_history_balanced_single_action": _stage3_single_action_full_history_loader,
 }
 
 

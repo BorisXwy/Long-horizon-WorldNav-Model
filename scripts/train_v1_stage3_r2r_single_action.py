@@ -33,6 +33,7 @@ from nav.v1.data import (  # noqa: E402
     BalancedSingleActionR2RBatchBuilder,
     FinalStage2BatchBuilder,
     FinalStage2DataConfig,
+    FullHistoryBalancedSingleActionR2RBatchBuilder,
     R2RStage3DataConfig,
     build_data_loader,
     stage2_data_config_from_dict,
@@ -60,6 +61,7 @@ class TrainConfig:
     batch_size: int
     grad_accum: int
     effective_batch_size: int
+    r2r_loader: str
     backbone_lr: float
     policy_lr: float
     weight_decay: float
@@ -158,6 +160,14 @@ def main() -> None:
     parser.add_argument("--output-root", type=Path, default=ROOT / "log/v1_stage3_r2r_single_action")
     parser.add_argument("--tensorboard-port", type=int, default=6039)
     parser.add_argument("--history-micro-choices", default="1,2,3,4,5,6,7")
+    parser.add_argument(
+        "--r2r-loader",
+        choices=(
+            "stage3_r2r_balanced_single_action",
+            "stage3_r2r_full_history_balanced_single_action",
+        ),
+        default="stage3_r2r_balanced_single_action",
+    )
     parser.add_argument("--max-r2r-episodes", type=int, default=0)
     parser.add_argument("--latent-manifest-dir", type=Path, default=DEFAULT_R2R_DATA_CONFIG.latent_manifest_dir)
     parser.add_argument("--rendered-manifest", type=Path, default=DEFAULT_R2R_DATA_CONFIG.rendered_manifest)
@@ -166,12 +176,10 @@ def main() -> None:
     parser.add_argument("--preflight-only", action="store_true")
     args = parser.parse_args()
 
-    if args.batch_size != 1:
-        raise SystemExit("balanced single-action Stage3 currently requires physical batch size = 1")
     if args.batch_size * args.grad_accum != 16:
         raise SystemExit("single-action Stage3 requires effective batch size = 16")
-    if args.grad_accum % 4 != 0:
-        raise SystemExit("grad_accum must be divisible by 4 for exact per-step class balance")
+    if (args.batch_size * args.grad_accum) % 4 != 0:
+        raise SystemExit("effective batch size must be divisible by 4 for exact per-step class balance")
     os.environ.setdefault("NAV_INF_WORLD_ROOT", str(ROOT.parent / "Infinite-World"))
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -222,11 +230,14 @@ def main() -> None:
         seed=args.seed,
     )
     r2r_builder = build_data_loader(
-        "stage3_r2r_balanced_single_action",
+        args.r2r_loader,
         config=r2r_data_cfg,
         history_action_horizon=policy_cfg.history_action_horizon,
     )
-    if not isinstance(r2r_builder, BalancedSingleActionR2RBatchBuilder):
+    if not isinstance(
+        r2r_builder,
+        (BalancedSingleActionR2RBatchBuilder, FullHistoryBalancedSingleActionR2RBatchBuilder),
+    ):
         raise TypeError(type(r2r_builder))
 
     train_cfg = TrainConfig(
@@ -237,6 +248,7 @@ def main() -> None:
         batch_size=args.batch_size,
         grad_accum=args.grad_accum,
         effective_batch_size=args.batch_size * args.grad_accum,
+        r2r_loader=args.r2r_loader,
         backbone_lr=args.backbone_lr,
         policy_lr=args.policy_lr,
         weight_decay=args.weight_decay,
@@ -252,10 +264,15 @@ def main() -> None:
     )
     fast_parameters = model.policy_fast_parameters()
     backbone_parameters = model.backbone_parameters()
+    full_history_mode = isinstance(r2r_builder, FullHistoryBalancedSingleActionR2RBatchBuilder)
     preflight = {
         "event": "stage3_r2r_single_action_preflight",
         "time": now(),
-        "status": "diagnostic_full_model_single_action; temporal representation unchanged",
+        "status": (
+            "full_model_stage3_full_episode_prefix_ablation"
+            if full_history_mode
+            else "diagnostic_full_model_single_action; temporal representation unchanged"
+        ),
         "train": asdict(train_cfg),
         "r2r": r2r_builder.summary(),
         "replay_data": replay_builder.summary(),
@@ -274,7 +291,10 @@ def main() -> None:
             },
         },
         "sample_rule": {
-            "history": "existing T4 K=1..7 Register rollout; unchanged for this diagnostic",
+            "history": r2r_builder.summary().get(
+                "history_semantics",
+                "existing T4 K=1..7 sampled Register rollout",
+            ),
             "z_obs": "existing current T4 micro chunk; temporal alignment intentionally unchanged",
             "target": "one primitive at label_start=obs_micro*12+12",
             "balance": "logical copy via exact STOP/MOVE/LEFT/RIGHT cyclic sampling",
@@ -378,6 +398,9 @@ def main() -> None:
                     "lr_backbone": optimizer.param_groups[0]["lr"],
                     "lr_policy": optimizer.param_groups[1]["lr"],
                     "r2r_history_micro": r2r_meta_last.get("history_micro"),
+                    "r2r_history_micro_min": r2r_meta_last.get("history_micro_min"),
+                    "r2r_history_micro_max": r2r_meta_last.get("history_micro_max"),
+                    "r2r_history_micro_mean": r2r_meta_last.get("history_micro_mean"),
                     "r2r_text_hits": r2r_meta_last.get("text_hits"),
                     "r2r_text_fallbacks": r2r_meta_last.get("text_fallbacks"),
                     "replay_history_iw": replay_meta_last.get("history_iw"),
