@@ -12,6 +12,36 @@
 
 当前训练主线：Stage1 训练视频生成记忆与 action/text/interface 格式；Stage2 在同一视频生成范式中加入 3D/Pose hidden supervision；Stage3 加入 VLN policy/action loss，并与 Stage1/Stage2 loss 做比例混合以避免退化。
 
+## 2026-08-28 两路 Stage3 延长至 step6000
+
+GPU0 的 H4 full-history natural run 与 GPU1 的 H1 short-history balanced run，
+训练目标统一延长到绝对 optimizer step 6000。为避免停止当前进程造成未落盘
+进度损失，两路先完成原定 step2000；独立 tmux watcher 随后读取最新完整
+checkpoint，同时恢复 world model、policy head 和 AdamW state，并自动继续
+`step2001..6000`。每 200 step 保存一次。
+
+```text
+watcher entry:
+  scripts/watch_and_continue_v1_stage3_to_step6000.sh
+
+GPU0 / H4 natural:
+  current run: stage3_r2r_fullhistory_natural_a4_mb1_ebs16_from_stage2step3400_2k_20260828
+  watcher tmux: nav_stage3_h4_to6000
+  continuation TensorBoard metadata port: 6042
+
+GPU1 / H1 balanced:
+  current run: stage3_r2r_single_action_balanced_resume1400_to2000_gpu1_20260828
+  watcher tmux: nav_stage3_h1_to6000
+  continuation TensorBoard metadata port: 6043
+```
+
+Epoch 口径必须分开说明：H4 natural 有 35,941 个 unique windows，EBS16，
+所以 1 epoch 约为 2,247 optimizer steps，6000 step 约为 2.67 epoch；若要求
+数学上完整的 3.00 epoch，应训练到约 step6741。H1 balanced 使用四类有放回
+cyclic sampling，没有严格的无放回 epoch；6000 step 对应 96,000 个样本曝光，
+约等于其 88,602 个自然窗口总数的 1.08 倍，但不是 3 个 natural-data epoch。
+本轮以用户指定的绝对 step6000 为停止标准。
+
 ## 2026-08-28 Stage3 H4 自然分布协议
 
 正式 Stage3 在 DEC-047 的 full episode prefix/Register 语义上，只替换动作目标与
