@@ -102,6 +102,14 @@
   checkpoint 必须复用同一 paired protocol 检查 macro recall 与 rare-action recall。
 - **结果**：`result/v1_stage3_action_chunk_compare/paired256_old1400_vs_h4step200_20260828/summary.json`。
   【已验证→result/v1_stage3_action_chunk_compare/paired256_old1400_vs_h4step200_20260828/summary.json】
+- **旧 H1 纵向核验**：使用完全相同的原生 short-window natural evaluator、
+  seed=20260830 和 128 windows 对比 step800/step1400。step800 为
+  CE=1.3601、accuracy=15.63%、macro recall=26.80%，step1400 为
+  CE=1.4696、accuracy=14.84%、macro recall=26.55%；预测分布分别为
+  `13/7/108/0` 与 `11/7/110/0`（STOP/MOVE/LEFT/RIGHT）。前 32 个落盘 example
+  的 sample ID/history 完全配对。因此 balanced training loss 的下降没有转化为
+  natural policy 改善，step800 后继续训练到 step1400 基本无效。
+  【已验证→result/v1_stage3_single_action/step1400_natural128_seed20260830/summary.json】
 
 ### DEC-046 补充（2026-08-25）
 

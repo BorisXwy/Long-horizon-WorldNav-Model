@@ -94,6 +94,36 @@ result:
 
 【已验证→result/v1_stage3_action_chunk_compare/paired256_old1400_vs_h4step200_20260828/summary.json】
 
+#### 旧 H1 从 step800 到 step1400 是否真正改善
+
+为排除上表 full-history protocol 与旧版 short-window 训练不一致的影响，进一步
+使用旧模型原生 evaluator 做严格纵向对比：两次均为 short-window natural、
+128 windows、correct instruction、seed=20260830。前 32 个落盘 example 的
+sample ID 与 history length 完全一致。
+
+| Checkpoint | Natural CE | Accuracy | Macro Recall | 预测分布 STOP/MOVE/LEFT/RIGHT |
+| ---: | ---: | ---: | ---: | --- |
+| step800 | 1.3601 | 15.63% | 26.80% | 13 / 7 / 108 / 0 |
+| step1400 | 1.4696 | 14.84% | 26.55% | 11 / 7 / 110 / 0 |
+
+结论：没有可测得的 natural policy 改善。训练日志中的 200-step balanced 平均
+loss 从 step1–200 的 1.2891 降至 step1201–1400 的 1.1776，balanced accuracy
+从 37.84% 升至 44.56%，说明优化器确实继续拟合了人工四类均衡训练目标；但
+natural eval 的预测模式几乎不变，仍基本塌缩到 TURN_LEFT，且 CE 反而变差。
+step800 之后的 loss 下降不能作为导航能力提升证据。
+
+```text
+step800 result:
+  result/v1_stage3_single_action/
+    modular_refactor_step800_natural_balanced128_seed20260830/summary.json
+
+step1400 result:
+  result/v1_stage3_single_action/
+    step1400_natural128_seed20260830/summary.json
+```
+
+【已验证→result/v1_stage3_single_action/step1400_natural128_seed20260830/summary.json】
+
 ## 2026-08-27 Stage3 全量历史 one-step 均衡对照（已停止）
 
 结论：Stage3 导航样本不再将 Register history 人工截断为随机 `K=1..7` window。
