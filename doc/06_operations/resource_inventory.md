@@ -5,7 +5,7 @@
 | 文档 ID | `NAV-OPS-001` |
 | 类型 | 资源总账（Resource Inventory） |
 | 状态 | Live / Source of Truth |
-| 更新时间 | 2026-08-22（R2R train 优先准备中） |
+| 更新时间 | 2026-08-29（新增流式 3D / navigation 官方复现资源） |
 | 职责 | 维护数据、权重、环境、仓库、日志和结果的唯一标准路径 |
 
 本文档记录 NAV 新实验可直接使用的数据集、预训练权重和本地参考仓库。
@@ -751,6 +751,20 @@ VBench 六项技术指标子集完成评测。正式结果文件为
 | Infinite-World | `../Infinite-World` | ICML 2026 长时程动作条件世界模型 |
 | VBench | `../VBench` | 官方视频生成质量评测基准与提示词集合 |
 | RELIC | （待跟踪，无开源） | 2025-12 arXiv 2512.04040，Adobe+Google，14B 长程交互世界模型；截至 2026-08 无公开代码/权重，仅有项目页 https://relic-worldmodel.github.io/ 与网站源码仓 `Relic-WorldModel/relic-worldmodel.github.io`（HTML）。论文级参考，待官方发布后 clone 到 `../relic` 并配 `virtual_env/.venv_relic` |
+
+### 2026-08-29 流式 3D 与 navigation 官方复现资源
+
+| 项目 | 仓库 revision | 虚拟环境 | 权重 | 已验证结果 |
+| --- | --- | --- | --- | --- |
+| LingBot-Map | `../lingbot-map` @ `1740f18ead3cca8e0e07dd0ec6b7030d22f0894c` | `../virtual_env/.venv_lingbot_map` | `/sharedata/lingbot-map/lingbot-map.pt` | `NAV/result/streaming_3d_reproduction/lingbot_map/official_university_24f_sdpa_20260829/` |
+| ABot-Recon | `../ABot-Recon` @ `cd6a99f889aee7a165f59b414d4b351caa1c2956` | `../virtual_env/.venv_abot_recon` | `/sharedata/ABot-Recon/checkpoints/abot_recon.safetensors` | `NAV/result/streaming_3d_reproduction/abot_recon/official_university_24f_sdpa_20260829/` |
+| LoGoPlanner | `../NavDP` @ `878740a2011856d0e3782dd6ccd880fd2eccd70f`；Pi3 @ `b412c3bd236dfd7686f1e4b48004d5087f2fa093` | `../virtual_env/.venv_navdp` | `/sharedata/LoGoPlanner/modelscope/logoplanner_policy.ckpt` | `NAV/result/streaming_3d_reproduction/logoplanner/official_nyuv2_rgbd_12f_torch251_20260829/` |
+
+三者均已在 GPU 1 运行官方完整权重前向。统一启动入口为
+`NAV/scripts/reproduction/run_{lingbot_map,abot_recon,logoplanner}_gpu1.sh`，日志在
+`NAV/log/reproduction/streaming_3d_20260829/`；模型机制、精确 token 形状、训练监督、
+sample 构造与复现限制记录在
+`NAV/doc/04_evaluation/streaming_3d_reconstruction_and_navigation_reproduction.md`。
 
 ## 路径约定
 
