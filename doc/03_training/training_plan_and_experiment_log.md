@@ -124,6 +124,43 @@ step1400 result:
 
 【已验证→result/v1_stage3_single_action/step1400_natural128_seed20260830/summary.json】
 
+### 2026-08-28 H1 balanced 从 step1400 续训
+
+为补足旧 H1 balanced 对照的训练步数，GPU1 从最后一个完整 checkpoint
+`step_001400.pt` 续训到绝对 step 2000。恢复范围包括完整
+world model、policy head 与 AdamW optimizer state；日志和新 checkpoint 使用
+绝对 step `1401..2000`。原进程虽曾运行到内存 step1418，但未保存对应权重，
+因此不可复现的 18 步不纳入续训起点。数据 sampler 使用新的 seed 重新实例化，
+故这是严格的权重/优化器续训，但不是原数据序列的 bitwise continuation。
+
+```text
+GPU: 1
+tmux: nav_stage3_balanced_resume1400
+TensorBoard: port 6041
+run:
+  log/v1_stage3_r2r_single_action/
+    stage3_r2r_single_action_balanced_resume1400_to2000_gpu1_20260828/
+
+source:
+  log/v1_stage3_r2r_single_action/
+    stage3_r2r_single_action_balanced_from_stage2step3400_2k_20260826/
+      checkpoints/step_001400.pt
+
+protocol:
+  H=1 balanced-class cycle
+  history K=1..7 micro chunks
+  micro batch=1, gradient accumulation=16, EBS=16
+  backbone_lr=2e-6, policy_lr=1e-4
+  L = CE_4 + 0.25 * L_visual_replay + 0.05 * L_pose_replay
+  save at absolute step 1600 / 1800 / 2000
+```
+
+绝对 step1401 已完成：144.59 s/optimizer step，CUDA max allocated 28.77 GiB；
+`policy CE=1.1605`、balanced accuracy/macro recall 均为 37.5%，
+`visual replay=0.0710`、`pose replay=0`，所有训练量均为有限值。该记录验证了
+模型、policy head、AdamW state、完整 policy/replay forward-backward 的恢复链路。
+【已验证→`log/v1_stage3_r2r_single_action/stage3_r2r_single_action_balanced_resume1400_to2000_gpu1_20260828/train.jsonl`】
+
 ## 2026-08-27 Stage3 全量历史 one-step 均衡对照（已停止）
 
 结论：Stage3 导航样本不再将 Register history 人工截断为随机 `K=1..7` window。

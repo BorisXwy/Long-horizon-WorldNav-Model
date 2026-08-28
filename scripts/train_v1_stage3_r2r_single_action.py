@@ -77,6 +77,8 @@ class TrainConfig:
     seed: int
     output_root: str
     tensorboard_port: int
+    resume_optimizer: bool
+    step_offset: int
 
 
 def now() -> str:
@@ -162,6 +164,17 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=20260826)
     parser.add_argument("--output-root", type=Path, default=ROOT / "log/v1_stage3_r2r_single_action")
     parser.add_argument("--tensorboard-port", type=int, default=6039)
+    parser.add_argument(
+        "--resume-optimizer",
+        action="store_true",
+        help="restore AdamW state from --checkpoint for an exact weight/optimizer continuation",
+    )
+    parser.add_argument(
+        "--step-offset",
+        type=int,
+        default=0,
+        help="absolute optimizer-step offset used for logging and checkpoint names",
+    )
     parser.add_argument("--history-micro-choices", default="1,2,3,4,5,6,7")
     parser.add_argument("--action-chunk", type=int, default=1)
     parser.add_argument(
@@ -227,6 +240,16 @@ def main() -> None:
     source_ckpt = model_assembly.source_payload
     if source_ckpt is None:
         raise RuntimeError("Stage3 assembly did not return its Stage2 source payload")
+    if args.resume_optimizer:
+        if "optimizer" not in source_ckpt:
+            raise RuntimeError("--resume-optimizer requested but checkpoint has no optimizer state")
+        source_step = int(source_ckpt.get("step", -1))
+        if args.step_offset != source_step:
+            raise RuntimeError(
+                f"resume step mismatch: --step-offset={args.step_offset}, checkpoint step={source_step}"
+            )
+    elif args.step_offset:
+        raise RuntimeError("--step-offset requires --resume-optimizer")
     policy_cfg = model.cfg
 
     source_data_payload = source_ckpt.get("data_config") or source_ckpt.get("stage2_replay_data_config")
@@ -289,6 +312,8 @@ def main() -> None:
         seed=args.seed,
         output_root=str(args.output_root),
         tensorboard_port=args.tensorboard_port,
+        resume_optimizer=args.resume_optimizer,
+        step_offset=args.step_offset,
     )
     fast_parameters = model.policy_fast_parameters()
     backbone_parameters = model.backbone_parameters()
@@ -371,6 +396,8 @@ def main() -> None:
         ],
         weight_decay=args.weight_decay,
     )
+    if args.resume_optimizer:
+        optimizer.load_state_dict(source_ckpt["optimizer"])
     writer = SummaryWriter(str(run_dir / "tensorboard"))
     log_path = run_dir / "train.jsonl"
     sampled_target_counts: Counter[int] = Counter()
@@ -379,7 +406,8 @@ def main() -> None:
         log.write(json.dumps({"event": "start", "time": now(), "run_dir": str(run_dir), **preflight}, ensure_ascii=False) + "\n")
         last = time.time()
         global_start = time.time()
-        for step in range(1, args.steps + 1):
+        for local_step in range(1, args.steps + 1):
+            step = args.step_offset + local_step
             optimizer.zero_grad(set_to_none=True)
             metrics: dict[str, float] = {}
             step_target_counts: Counter[int] = Counter()
@@ -467,7 +495,7 @@ def main() -> None:
                 for key, value in record.items():
                     if isinstance(value, (int, float)):
                         writer.add_scalar(key, value, step)
-            if step % args.save_every == 0 or step == args.steps:
+            if step % args.save_every == 0 or local_step == args.steps:
                 checkpoint = save_checkpoint(
                     model=model,
                     optimizer=optimizer,
