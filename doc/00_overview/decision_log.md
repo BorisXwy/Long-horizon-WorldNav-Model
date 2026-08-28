@@ -50,6 +50,7 @@
 | DEC-046 | 2026-08-25 | Accepted / Code Updated / Training Pending | Stage3 只替换 backbone 之后的离散 action readout：加载完整 Stage2 step2600 后，从 Wan 最后一层现有 action-output slots 读取 `[B,10,1536]` hidden，经 fresh `Linear(1536,144)` 输出 combo logits。backbone 之前及内部的输入、A_noise/timestep、token layout 和 mask 全部不变；旧 flow output heads 冻结且不进入 loss。 |
 | DEC-047 | 2026-08-27 | Superseded by DEC-052 / Stopped at step 148 | Stage3 R2R 的每个 policy target 必须读取从 episode 起点到当前 `Z_obs` 之前的完整前缀：所有样本满足 `start_micro=0`、`history_micro=obs_micro`，完整前缀只通过固定大小 Register recurrent update 压缩，不向 Wan 拼接原始历史 token。原实验保持四类均衡 one-step CE；`micro=2 × accum=8` OOM 后改用 `micro=1 × accum=16`。完整历史语义继续保留，但 one-step 均衡采样口径由 DEC-052 覆盖。 |
 | DEC-052 | 2026-08-28 | Accepted / Code Updated / Running | 正式 Stage3 R2R 改为 `action_chunk=4`，但 backbone 永远保留 Stage2 的 10 个 action token。`H` 只控制读取和监督前 H 个 hidden：H=4 时前 4 个 hidden 分别经共享四分类 MLP，loss 为四个位置的平均 CE；后 6 个 token 仍参与原 backbone 前向但不读出、不监督。训练 window 按自然分布 shuffle、无放回遍历，不做类别均衡、复制或 class weight。完整 episode prefix/Register 语义、Stage2 visual/pose replay、EBS16 和 step3400 初始化均不变。原 full-history balanced one-step run 在 step148 停止；此前短窗口 balanced one-step 对照继续运行。 |
+| DEC-053 | 2026-08-28 | Measured / H4 Training Continues | 旧 H1 balanced short-window 训练在 step1418 停止，最新完整 checkpoint 为 step1400。使用 256 个同序、无均衡的 natural full-prefix R2R windows 成对评测旧 H1 step1400 与新 H4 step200：旧 H1 slot-0 accuracy=21.48%、macro recall=34.02%；新 H4 slot-0 accuracy=73.44%，但等于 MOVE majority baseline，且四槽 1024/1024 个预测均为 MOVE_FORWARD，macro recall=25%。因此 H4 当前较高 accuracy/较低 CE 是多数类塌缩而非有效 action learning；H4 正式训练暂继续，后续 checkpoint 必须用同一协议复测。 |
 
 ## 记录要求
 
@@ -76,6 +77,31 @@
   首个 optimizer step 用时 140.14 秒，policy CE=1.4363、visual replay=0.1043、
   pose replay=1.15e-4，CUDA max allocated=28.23 GiB；optimizer state 建立后
   GPU0 进程总占用约 31.4 GiB，未发生 OOM。
+
+### DEC-053 补充（2026-08-28）
+
+- **统一评测入口**：`scripts/eval_v1_stage3_action_chunk_compare.py`。
+- **checkpoint**：旧 H1 使用
+  `stage3_r2r_single_action_balanced_from_stage2step3400_2k_20260826/checkpoints/step_001400.pt`；
+  新 H4 使用
+  `stage3_r2r_fullhistory_natural_a4_mb1_ebs16_from_stage2step3400_2k_20260828/checkpoints/step_000200.pt`。
+- **协议**：R2R train、256 个 paired unique windows、full episode prefix、natural
+  shuffle、无 class balancing、correct instruction、batch size 4、完整
+  Register + shared Wan + policy head 前向。旧 H1 只评 future slot 0；新 H4
+  评 4 slots，并单列 slot 0 作一一配对比较。
+- **旧 H1**：slot-0 CE=1.3362、accuracy=21.48%、macro recall=34.02%；预测
+  STOP/MOVE/LEFT/RIGHT=`70/38/96/52`，没有单类塌缩，但远低于 natural
+  MOVE majority baseline 73.44%。该结论只适用于 full-history natural 分布，
+  不等价于其原生 balanced short-window 训练分布表现。
+- **新 H4**：slot-0 accuracy=73.44%、macro recall=25%；全四槽共 1024 actions，
+  CE=0.9603、accuracy=66.21%、sequence exact match=20.70%。所有 1024 个预测
+  均为 MOVE_FORWARD，因此 slot-0 和全四槽 accuracy 都恰好等于各自 majority
+  baseline；STOP/LEFT/RIGHT recall 全为 0。
+- **结论**：step200 的 H4 仍处于 natural-distribution majority collapse；不能将
+  较低 CE 或较高 raw accuracy 解释为导航能力提升。H4 训练继续，后续 step400+
+  checkpoint 必须复用同一 paired protocol 检查 macro recall 与 rare-action recall。
+- **结果**：`result/v1_stage3_action_chunk_compare/paired256_old1400_vs_h4step200_20260828/summary.json`。
+  【已验证→result/v1_stage3_action_chunk_compare/paired256_old1400_vs_h4step200_20260828/summary.json】
 
 ### DEC-046 补充（2026-08-25）
 

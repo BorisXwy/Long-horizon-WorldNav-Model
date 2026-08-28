@@ -56,6 +56,44 @@ TensorBoard:
 `visual replay=0.1043`、`pose replay=1.15e-4`、`grad norm=10.8439`，均为有限值。
 optimizer state 建立后 GPU0 总占用约 31.4 GiB，未发生 OOM。
 
+### 2026-08-28 H1 step1400 与 H4 step200 配对开环评测
+
+旧短窗口 balanced H1 训练已在内存 step1418 停止；由于只按每 200 step 保存，
+其最新可复现权重为 step1400。新 H4 full-history natural 训练继续运行，当前用于
+对比的最新完整权重为 step200。
+
+统一评测口径：R2R train 的 256 个同序 full-prefix natural windows，不做样本或
+类别均衡，使用 correct instruction；batch size=4。两版均执行完整 Register +
+shared Wan + policy head 前向。旧 H1 监督/评测 slot 0，新 H4 评测四槽并单列
+slot 0，因此 slot-0 指标为严格 paired comparison。
+
+| 模型 | checkpoint | 评测动作数 | CE | Accuracy | Macro Recall | Majority Baseline | 预测分布 STOP/MOVE/LEFT/RIGHT |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 旧 balanced H1 | step1400 | 256 | 1.3362 | 21.48% | 34.02% | 73.44% | 70 / 38 / 96 / 52 |
+| 新 natural H4，slot 0 | step200 | 256 | — | 73.44% | 25.00% | 73.44% | 0 / 256 / 0 / 0 |
+| 新 natural H4，all slots | step200 | 1024 | 0.9603 | 66.21% | 25.00% | 66.21% | 0 / 1024 / 0 / 0 |
+
+新 H4 的 raw accuracy 虽高，但预测全部为 MOVE_FORWARD，且 accuracy 与 majority
+baseline 完全相等；STOP、TURN_LEFT、TURN_RIGHT recall 均为 0。当前 step200
+属于明确的 majority collapse，不能解释为 policy 已学会 action。旧 H1 没有单类
+塌缩并有一定 minority recall，但在 full-history natural 分布上总体 accuracy 很低。
+H4 训练暂不停止；step400 及之后应复用相同 evaluator，重点检查 macro recall、
+rare-action recall 和 prediction distribution 是否脱离全 MOVE。
+
+```text
+evaluator:
+  scripts/eval_v1_stage3_action_chunk_compare.py
+
+result:
+  result/v1_stage3_action_chunk_compare/
+    paired256_old1400_vs_h4step200_20260828/
+      summary.json
+      examples.json
+      paired_first_slot_confusion.png
+```
+
+【已验证→result/v1_stage3_action_chunk_compare/paired256_old1400_vs_h4step200_20260828/summary.json】
+
 ## 2026-08-27 Stage3 全量历史 one-step 均衡对照（已停止）
 
 结论：Stage3 导航样本不再将 Register history 人工截断为随机 `K=1..7` window。
