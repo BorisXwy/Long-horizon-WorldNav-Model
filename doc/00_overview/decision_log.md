@@ -5,7 +5,7 @@
 | 文档 ID | `NAV-OVR-002` |
 | 类型 | 决策日志（Decision Log） |
 | 状态 | Live |
-| 更新时间 | 2026-08-28 |
+| 更新时间 | 2026-09-01 |
 | 职责 | 记录会影响模型、数据、训练或评测口径的已确认决策 |
 
 ## 决策表
@@ -51,8 +51,36 @@
 | DEC-047 | 2026-08-27 | Superseded by DEC-052 / Stopped at step 148 | Stage3 R2R 的每个 policy target 必须读取从 episode 起点到当前 `Z_obs` 之前的完整前缀：所有样本满足 `start_micro=0`、`history_micro=obs_micro`，完整前缀只通过固定大小 Register recurrent update 压缩，不向 Wan 拼接原始历史 token。原实验保持四类均衡 one-step CE；`micro=2 × accum=8` OOM 后改用 `micro=1 × accum=16`。完整历史语义继续保留，但 one-step 均衡采样口径由 DEC-052 覆盖。 |
 | DEC-052 | 2026-08-28 | Accepted / Code Updated / Running | 正式 Stage3 R2R 改为 `action_chunk=4`，但 backbone 永远保留 Stage2 的 10 个 action token。`H` 只控制读取和监督前 H 个 hidden：H=4 时前 4 个 hidden 分别经共享四分类 MLP，loss 为四个位置的平均 CE；后 6 个 token 仍参与原 backbone 前向但不读出、不监督。训练 window 按自然分布 shuffle、无放回遍历，不做类别均衡、复制或 class weight。完整 episode prefix/Register 语义、Stage2 visual/pose replay、EBS16 和 step3400 初始化均不变。原 full-history balanced one-step run 在 step148 停止；此前短窗口 balanced one-step 对照继续运行。 |
 | DEC-053 | 2026-08-28 | Measured / H4 Training Continues | 旧 H1 balanced short-window 训练在 step1418 停止，最新完整 checkpoint 为 step1400。使用 256 个同序、无均衡的 natural full-prefix R2R windows 成对评测旧 H1 step1400 与新 H4 step200：旧 H1 slot-0 accuracy=21.48%、macro recall=34.02%；新 H4 slot-0 accuracy=73.44%，但等于 MOVE majority baseline，且四槽 1024/1024 个预测均为 MOVE_FORWARD，macro recall=25%。因此 H4 当前较高 accuracy/较低 CE 是多数类塌缩而非有效 action learning；H4 正式训练暂继续，后续 checkpoint 必须用同一协议复测。 |
+| DEC-054 | 2026-09-01 | Accepted / Code Updated / Running | 停止 DEC-052 的无权重 natural H4 训练；新对照仍按 35,941 个 full-prefix unique windows 自然 shuffle、无放回遍历且不复制样本，但 policy objective 改为 inverse-frequency class-balanced CE。权重由全训练集 H4 token 计数计算为 `w_c=N/(4N_c)`，逐 token 加权后直接求 mean；Stage2 step3400 初始化、10 个 backbone action slots/前4个监督、EBS16、visual/pose replay 与优化器参数均不变。完整 step1 已通过，未出现启动即全 MOVE。 |
 
 ## 记录要求
+
+### DEC-054 补充（2026-09-01）
+
+- **停止旧任务**：无权重 H4 continuation 在内存 step2375 左右停止；最后一个
+  完整 checkpoint 为 `step_002200.pt`。step1–2375 的 accuracy 长期约等于
+  MOVE_FORWARD 占比，macro recall 约 25%，因此不能继续把 loss 下降解释为
+  conditional policy learning。【已验证→log/v1_stage3_r2r_single_action/stage3_h4_natural_resume2000_to6000_gpu0_20260831_114329/train.jsonl】
+- **不改数据采样**：仍使用 35,941 个 natural full-prefix unique windows，epoch
+  内 shuffle 后无放回遍历；不复制 TURN/STOP window，不做四类 cyclic sampler。
+- **权重口径**：全量 `H=4` token 计数为
+  `STOP/MOVE/LEFT/RIGHT=9274/96177/18900/19413`，总数 `N=143764`；loss 使用
+  `w_c=N/(4N_c)`，对应约 `3.875/0.374/1.902/1.851`。实现必须计算
+  `mean(CE_token * w_target)`，不得使用 physical batch=1 下会按当前 microbatch
+  权重和重新归一化的 `F.cross_entropy(weight=..., reduction="mean")`。
+- **严格对照**：新 run 从与 DEC-052 相同的 Stage2 step3400 初始化，不继承
+  majority-collapse 的 Stage3 权重或 optimizer；除 policy loss 外，模型结构、
+  full-history Register、instruction、`Z_obs`、H4 readout、Stage2 visual/pose replay、
+  `micro=1 × accumulation=16` 与 learning rate 全部保持一致。
+- **验收重点**：raw accuracy 不作为首要指标；必须检查 macro recall、四类 recall、
+  prediction distribution，以及 correct/shuffled/empty instruction sensitivity。
+- **启动核验**：新 run 的完整 step1 用时 145.80 秒，CUDA max allocated
+  28.23 GiB；weighted policy loss=1.2691、unweighted CE=1.4363、visual
+  replay=0.1043、pose replay=1.15e-4。64 个动作预测分布为
+  `STOP/MOVE/LEFT/RIGHT=11/12/40/1`、macro recall=32.22%，已脱离旧任务从启动
+  即全 MOVE 的模式，但单步不构成收敛或泛化结论。
+  【已验证→log/v1_stage3_r2r_single_action/stage3_r2r_fullhistory_natural_h4_classbalanced_from_stage2step3400_6k_20260901/train.jsonl】
+
 
 ### DEC-052 补充（2026-08-28）
 

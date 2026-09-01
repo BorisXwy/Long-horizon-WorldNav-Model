@@ -65,6 +65,7 @@ class TrainConfig:
     effective_batch_size: int
     r2r_loader: str
     action_chunk: int
+    policy_loss: str
     backbone_lr: float
     policy_lr: float
     weight_decay: float
@@ -178,6 +179,15 @@ def main() -> None:
     parser.add_argument("--history-micro-choices", default="1,2,3,4,5,6,7")
     parser.add_argument("--action-chunk", type=int, default=1)
     parser.add_argument(
+        "--policy-loss",
+        choices=("cross_entropy", "inverse_frequency"),
+        default="cross_entropy",
+        help=(
+            "policy objective; inverse_frequency keeps natural shuffled windows but weights each "
+            "class by N/(C*N_c)"
+        ),
+    )
+    parser.add_argument(
         "--r2r-loader",
         choices=(
             "stage3_r2r_balanced_single_action",
@@ -224,6 +234,7 @@ def main() -> None:
         policy_queries=args.action_chunk,
         backbone_action_tokens=(1 if balanced_loader else 10),
         sampler=("balanced_class_cycle" if balanced_loader else "natural_window_no_balance"),
+        loss_type=args.policy_loss,
     )
     model_assembly = build_model(
         "stage3_single_action_checkpoint",
@@ -289,6 +300,16 @@ def main() -> None:
         ),
     ):
         raise TypeError(type(r2r_builder))
+    r2r_summary = r2r_builder.summary()
+    if args.policy_loss == "inverse_frequency":
+        if not isinstance(r2r_builder, FullHistoryNaturalActionChunkR2RBatchBuilder):
+            raise SystemExit("inverse-frequency loss currently requires the natural H=4 loader")
+        label_counts = r2r_summary.get("action_label_counts")
+        if not isinstance(label_counts, dict):
+            raise RuntimeError("natural H=4 loader did not report action_label_counts")
+        model.configure_inverse_frequency_class_weights(
+            [int(label_counts[ACTION_NAMES[action_id]]) for action_id in sorted(ACTION_NAMES)]
+        )
 
     train_cfg = TrainConfig(
         run_name=args.run_name,
@@ -300,6 +321,7 @@ def main() -> None:
         effective_batch_size=args.batch_size * args.grad_accum,
         r2r_loader=args.r2r_loader,
         action_chunk=args.action_chunk,
+        policy_loss=args.policy_loss,
         backbone_lr=args.backbone_lr,
         policy_lr=args.policy_lr,
         weight_decay=args.weight_decay,
@@ -331,7 +353,7 @@ def main() -> None:
             else "diagnostic_full_model_single_action; temporal representation unchanged"
         ),
         "train": asdict(train_cfg),
-        "r2r": r2r_builder.summary(),
+        "r2r": r2r_summary,
         "replay_data": replay_builder.summary(),
         "model": model.structural_report(),
         "source_checkpoint_step": int(source_ckpt["step"]),
@@ -358,15 +380,23 @@ def main() -> None:
                 "label_start=obs_micro*12+12"
             ),
             "balance": (
-                "natural shuffled window traversal; no class balancing or sample duplication"
+                (
+                    "natural shuffled window traversal; no sample duplication; "
+                    "inverse-frequency class-balanced CE"
+                    if args.policy_loss == "inverse_frequency"
+                    else "natural shuffled window traversal; no class balancing or sample duplication"
+                )
                 if natural_action_chunk_mode
                 else "logical copy via exact STOP/MOVE/LEFT/RIGHT cyclic sampling"
             ),
         },
-        "loss": (
-            f"L = mean_h CE_4(action[h]), H={args.action_chunk} + "
-            "lambda_video_replay * L_visual + lambda_pose_replay * L_pose"
-        ),
+        "loss": {
+            "policy": model.structural_report()["policy_loss"],
+            "total": (
+                f"L = L_policy(H={args.action_chunk}) + lambda_video_replay * L_visual + "
+                "lambda_pose_replay * L_pose"
+            ),
+        },
     }
     write_json(run_dir / "formal_preflight.json", preflight)
     write_json(
@@ -423,6 +453,10 @@ def main() -> None:
                     raise FloatingPointError(f"non-finite policy loss at step {step}: {policy_loss}")
                 policy_loss.backward()
                 metrics["loss_policy"] = metrics.get("loss_policy", 0.0) + float(out["loss"].detach().cpu()) / args.grad_accum
+                metrics["loss_policy_unweighted_ce"] = (
+                    metrics.get("loss_policy_unweighted_ce", 0.0)
+                    + float(out["loss_ce"].detach().cpu()) / args.grad_accum
+                )
                 target = r2r_batch["action_class"].detach().cpu().reshape(-1)
                 prediction = out["action_pred"].detach().cpu().reshape(-1)
                 for target_id, pred_id in zip(target.tolist(), prediction.tolist()):

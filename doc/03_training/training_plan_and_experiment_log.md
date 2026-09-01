@@ -5,12 +5,68 @@
 | 文档 ID | `NAV-TRN-010` |
 | 类型 | 训练计划与实验记录总览 |
 | 状态 | Live / Source of Truth |
-| 更新时间 | 2026-08-28 |
+| 更新时间 | 2026-09-01 |
 | 职责 | 集中维护 V1 Stage One/Two/Three 训练变量、loss、数据配比、正式 run、历史 V0 实验和 streaming sample 语义。 |
 
 ## 当前入口结论
 
 当前训练主线：Stage1 训练视频生成记忆与 action/text/interface 格式；Stage2 在同一视频生成范式中加入 3D/Pose hidden supervision；Stage3 加入 VLN policy/action loss，并与 Stage1/Stage2 loss 做比例混合以避免退化。
+
+## 2026-09-01 Stage3 natural H4 class-balanced 对照
+
+结论：此前无权重 natural H4 训练已经验证为 majority-class collapse，故在内存
+step2375 左右停止，最后一个完整 checkpoint 为 step2200。新训练不改变 natural
+window 分布、不复制样本，只将 policy objective 改成 inverse-frequency
+class-balanced CE，并从同一个 Stage2 step3400 重新初始化，以隔离 loss 改动。
+
+全量训练集共有 35,941 个 full-prefix windows、143,764 个 H4 action tokens：
+
+| Action | Count | Natural ratio | Loss weight `N/(4N_c)` |
+| --- | ---: | ---: | ---: |
+| STOP | 9,274 | 6.45% | 3.875 |
+| MOVE_FORWARD | 96,177 | 66.90% | 0.374 |
+| TURN_LEFT | 18,900 | 13.15% | 1.902 |
+| TURN_RIGHT | 19,413 | 13.50% | 1.851 |
+
+实现采用：
+
+```text
+per_token_ce = CE(logits[B,4,4], target[B,4], reduction=none)
+L_policy = mean(per_token_ce * class_weight[target])
+L_total = L_policy + 0.25 * L_visual + 0.05 * L_pose
+```
+
+这里不使用 `F.cross_entropy(weight=..., reduction="mean")`，因为 physical
+batch=1 时该接口会用当前 microbatch 的 target-weight sum 归一化；对于全 MOVE
+window，class weight 会被抵消，不能实现预期的全数据集等贡献口径。
+
+严格不变量：Stage2 step3400 初始化、single shared Wan、10 个 action token 中只
+监督前4个、full-history Register、natural shuffle without replacement、
+instruction/`Z_obs` 输入、visual/pose replay、micro batch 1、gradient accumulation
+16、EBS16、backbone LR `2e-6`、policy LR `1e-4` 均与旧 H4 相同。
+
+```text
+entry:
+  scripts/run_v1_stage3_r2r_h4_class_balanced_ebs16.sh
+
+planned run:
+  log/v1_stage3_r2r_single_action/
+    stage3_r2r_fullhistory_natural_h4_classbalanced_from_stage2step3400_6k_20260901/
+
+TensorBoard metadata port:
+  6043
+```
+
+该实验当前只验证 class-balanced objective 是否使模型脱离全 MOVE；验收必须看
+macro recall、各类 recall 和 instruction sensitivity，不能只看 raw accuracy。
+
+启动状态：GPU0 的 `tmux: nav_stage3_h4_classbalanced` 已完成完整 step1；
+TensorBoard 运行于 `tmux: nav_tb_stage3_h4_classbalanced`、端口6043。step1 用时
+145.80秒，显存峰值28.23GiB，weighted policy loss=1.2691、unweighted
+CE=1.4363、visual/pose replay=`0.1043/1.15e-4`。64个预测的
+`STOP/MOVE/LEFT/RIGHT=11/12/40/1`，macro recall=32.22%，没有出现旧版的全
+MOVE 启动塌缩；该结果仅为完整链路启动核验，不代表训练已收敛。
+【已验证→log/v1_stage3_r2r_single_action/stage3_r2r_fullhistory_natural_h4_classbalanced_from_stage2step3400_6k_20260901/train.jsonl】
 
 ## 2026-08-28 两路 Stage3 延长至 step6000
 

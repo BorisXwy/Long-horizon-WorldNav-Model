@@ -23,12 +23,24 @@ class SingleActionPolicyConfig:
     history_action_horizon: int = 10
     sampler: str = "balanced_class_cycle"
     action_query_input: str = "zero_noise_zero_timestep"
+    loss_type: str = "cross_entropy"
+    class_weights: tuple[float, ...] | None = None
 
     def __post_init__(self) -> None:
         if self.backbone_action_tokens is None:
             self.backbone_action_tokens = self.policy_queries
         if self.backbone_action_tokens < self.policy_queries:
             raise ValueError("backbone_action_tokens must be >= policy_queries")
+        if self.loss_type not in {"cross_entropy", "inverse_frequency"}:
+            raise ValueError(f"unsupported policy loss: {self.loss_type}")
+        if self.class_weights is not None:
+            self.class_weights = tuple(float(value) for value in self.class_weights)
+            if len(self.class_weights) != self.num_classes:
+                raise ValueError(
+                    f"class_weights must contain {self.num_classes} values, got {self.class_weights}"
+                )
+            if any(value <= 0 for value in self.class_weights):
+                raise ValueError(f"class_weights must be positive, got {self.class_weights}")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -63,6 +75,35 @@ class SingleActionStage3Model(nn.Module):
         self.world_model = world_model
         self.cfg = cfg
         self.policy_head = SingleActionPolicyHead(cfg).float()
+        initial_weights = (
+            torch.tensor(cfg.class_weights, dtype=torch.float32)
+            if cfg.class_weights is not None
+            else torch.ones(cfg.num_classes, dtype=torch.float32)
+        )
+        self.register_buffer("_policy_class_weights", initial_weights, persistent=False)
+
+    def configure_inverse_frequency_class_weights(self, counts: list[int]) -> tuple[float, ...]:
+        """Balance class contributions without changing natural window sampling.
+
+        The weight for class ``c`` is ``N / (C * N_c)``.  The weighted token
+        losses are averaged directly instead of using PyTorch's weighted-mean
+        reduction, whose per-microbatch denominator would cancel the desired
+        reweighting for homogeneous H=4 windows at physical batch size one.
+        """
+
+        if len(counts) != self.cfg.num_classes or any(int(value) <= 0 for value in counts):
+            raise ValueError(f"invalid class counts for inverse-frequency loss: {counts}")
+        total = float(sum(int(value) for value in counts))
+        weights = tuple(total / (self.cfg.num_classes * int(value)) for value in counts)
+        reference = self.policy_head.proj_out.weight
+        self._policy_class_weights = torch.tensor(
+            weights,
+            device=reference.device,
+            dtype=torch.float32,
+        )
+        self.cfg.loss_type = "inverse_frequency"
+        self.cfg.class_weights = weights
+        return weights
 
     def keep_policy_modules_fp32(self) -> None:
         """Avoid bf16 update quantization for fresh policy-only parameters."""
@@ -105,11 +146,24 @@ class SingleActionStage3Model(nn.Module):
         target = batch["action_class"].to(device=logits.device).long()
         if target.shape != logits.shape[:2]:
             raise RuntimeError(f"target shape {tuple(target.shape)} != logits prefix {tuple(logits.shape[:2])}")
-        loss_ce = F.cross_entropy(logits.reshape(-1, self.cfg.num_classes), target.reshape(-1))
+        per_token_ce = F.cross_entropy(
+            logits.reshape(-1, self.cfg.num_classes),
+            target.reshape(-1),
+            reduction="none",
+        ).reshape_as(target)
+        loss_ce = per_token_ce.mean()
+        if self.cfg.loss_type == "inverse_frequency":
+            if self.cfg.class_weights is None:
+                raise RuntimeError("inverse-frequency policy loss has no configured class weights")
+            token_weights = self._policy_class_weights.to(device=target.device)[target]
+            loss = (per_token_ce * token_weights).mean()
+        else:
+            loss = loss_ce
         return {
             **out,
-            "loss": loss_ce,
+            "loss": loss,
             "loss_ce": loss_ce.detach(),
+            "loss_balanced_ce": loss.detach(),
             "action_logits": logits,
             "action_pred": logits.argmax(dim=-1),
         }
@@ -129,6 +183,11 @@ class SingleActionStage3Model(nn.Module):
             "policy_logits_shape": ["B", self.cfg.policy_queries, self.cfg.num_classes],
             "policy_head_parameters": sum(parameter.numel() for parameter in self.policy_head.parameters()),
             "policy_fast_parameter_count": sum(parameter.numel() for parameter in self.policy_fast_parameters()),
+            "policy_loss": {
+                "type": self.cfg.loss_type,
+                "class_weights": self.cfg.class_weights,
+                "reduction": "mean(per_token_ce * class_weight[target])",
+            },
             "action_names": {str(key): value for key, value in ACTION_NAMES.items()},
             "policy_config": self.cfg.to_dict(),
         }
