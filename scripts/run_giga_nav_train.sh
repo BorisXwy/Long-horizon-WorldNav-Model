@@ -10,7 +10,15 @@ if [[ ! -x "$ENV_ROOT/bin/python" ]]; then
   echo "missing virtualenv Python: $ENV_ROOT/bin/python" >&2
   exit 2
 fi
-source "$ENV_ROOT/bin/activate"
+# This environment was provisioned without the optional activate script in
+# some installations.  Prefer activation when present, otherwise prepend its
+# bin directory and invoke the interpreter explicitly; both paths use the
+# same site-packages (including flash_attn).
+if [[ -f "$ENV_ROOT/bin/activate" ]]; then
+  source "$ENV_ROOT/bin/activate"
+else
+  export PATH="$ENV_ROOT/bin:$PATH"
+fi
 export PYTHONPATH="$ROOT/src:${PYTHONPATH:-}"
 export PYTHONUNBUFFERED=1
-exec python "$ROOT/scripts/train_giga_nav.py" "$@"
+exec "$ENV_ROOT/bin/python" "$ROOT/scripts/train_giga_nav.py" "$@"
