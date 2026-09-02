@@ -70,6 +70,7 @@ doc/_templates/    新文档和新实验记录模板
 | NAV-OVR-010 | Active / Consolidated | 规则与文档规范 | `doc/00_overview/project_rules_and_documentation_standard.md` |
 | NAV-OVR-020 | Live / Binding Standard | 最终正式结构与训练标准 | `doc/00_overview/final_formal_training_standard.md` |
 | NAV-MDL-001 | Live / Source of Truth | 模型结构与接口总览 | `doc/01_model/model_evolution_and_current_architecture.md` |
+| NAV-MDL-002 | Active / Full-chain Ablation | GigaNav + Wan2.1-1.3B 导航消融 | `doc/01_model/giga_nav_ablation_wan21_13b.md` |
 | NAV-DAT-010 | Live / Source of Truth | 数据准备、Schema 与状态总览 | `doc/02_data/data_preparation_schema_and_status.md` |
 | NAV-TRN-010 | Live / Source of Truth | 训练计划与实验记录总览 | `doc/03_training/training_plan_and_experiment_log.md` |
 | NAV-TRN-012 | Completed / Weekly Snapshot | 2026-08-19 至 2026-08-26 周进展 | `doc/03_training/weekly_progress_report_20260826.md` |

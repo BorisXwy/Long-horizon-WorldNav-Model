@@ -31,6 +31,17 @@
 
 > 合并自旧主题；原独立文件已并入本文，不再作为独立事实源维护。
 
+### GigaNav ablation 隔离规则（2026-09-02）
+
+`GigaNav` 是用于诊断“共享视频骨干是否能直接学习导航”的独立 ablation，不得
+悄悄替代 V1 的 Register/3D/三阶段主线。核心类定义和数据组装固定在
+`src/giga_nav/`，训练、评测、smoke 入口固定在 `scripts/`。它使用本地官方
+`Wan2.1-T2V-1.3B`，保留 GigaWorld 的共享 Wan token 顺序
+`[state, reference visual, action, noisy future visual]` 和 action-only readout；
+由于 R2R 是离散导航标签，输出头固定为四类 CE，R2R 没有 proprioceptive state 时
+使用显式零 state token。完整结构、参数统计、张量接口和验证边界见
+`doc/01_model/giga_nav_ablation_wan21_13b.md`。
+
 
 | 字段 | 内容 |
 | --- | --- |

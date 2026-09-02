@@ -143,6 +143,13 @@ stage2 probe sweep: add frozen-backbone layer probes and docs
 5. 纯目录重构不得改变默认 config、数据 window/sampling、张量形状、forward、loss、
    state_dict key 或 checkpoint payload。重构验收至少包含真实 loader 逐张量对照、
    正式 checkpoint 严格兼容加载和完整 Wan 前向数值对照。
+6. GigaWorld-style navigation ablation 必须与 V1 主线隔离：核心模型和数据组装
+   放在 `src/giga_nav/`，可执行训练/评测入口放在 `scripts/`。该 ablation 使用本地
+   Wan2.1-T2V-1.3B（不得误加载 Wan2.2-5B），保留 Giga 的
+   `[state, reference visual, action, noisy future]` 共享 token 计算；仅因 R2R
+   标签改用四类离散 CE，且缺失 proprioceptive state 时显式输入零 state token。
+   不得用 toy/scaffold backbone 代替完整 Wan 前向；规则、张量接口和实测结果同步
+   维护于 `doc/01_model/giga_nav_ablation_wan21_13b.md`。
 
 ## 内容边界
 
