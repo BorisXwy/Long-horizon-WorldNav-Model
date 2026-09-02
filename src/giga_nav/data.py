@@ -32,7 +32,7 @@ class GigaNavDataConfig:
     text_empty: Path = Path("/sharedata/RealEstate10K/nav_register/text/empty_umt5.pt")
     text_cache_root: Path = Path("/mnt/pool1/sharehome/xiewenyuan/academic/3d_wm_vln/NAV/data/train/r2r_ce/text_embeddings_stoppad_20260822_1605")
     history_micro_choices: str = "1,2,3,4,5,6,7"
-    action_horizon: int = 48
+    action_horizon: int = 8
     batch_size: int = 1
     max_episodes: int = 0
     seed: int = 20260902

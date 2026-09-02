@@ -28,6 +28,7 @@
 | DEC-014 | 2026-07-30 | Proposed / Semantics Accepted | Stage Three才引入导航任务，读取Stage Two probe选定层的Register-after-DiT表示；导航History只来自真实Observation，generated future不得回灌 |
 | DEC-015 | 2026-07-30 | Accepted | Stage One 1.0从原始Infinite-World初始化，只用DL3DV，全参数训练；1/2/3-history等比例shuffle采样，首Chunk用Extractor、后续用Updater，A/B均不加载旧RE10K checkpoint |
 | DEC-016 | 2026-07-30 | Measured / Waiting | GPU 1实测A BS4 OOM、A BS1峰值29.21GiB、B BS1峰值16.48GiB；A已超过半卡，暂不冒险启动A/B同卡并发1000-step，等待GPU分配决策 |
+| DEC-056 | 2026-09-03 | Accepted / Running | GigaNav Wan2.1-1.3B ablation 的导航 action horizon 固定为 H=8；正式训练采用物理 BS=1、梯度累积 32、EBS=32，保持完整共享 Wan backbone 与四类 CE。训练通过 Infinite-World 虚拟环境优先启用 FlashAttention；不可用时仅退回 SDPA，不改变结构。GPU1 启动独立长训，GPU0 不受影响。 |
 | DEC-017 | 2026-07-30 | Running | Stage One 1.0改为GPU0训练A、GPU1训练B；GPU0保留1个latent worker。启动时GPU1被其他账号占用约41GiB，B进入45,000MiB free-memory等待队列，启动并完成首步后自动增加3个GPU1 latent workers |
 | DEC-018 | 2026-07-31 | Accepted | Stage One 1.0正式训练从1000扩展为10000 optimizer steps，每1000 steps保存完整checkpoint；旧A-1000在step373停止并作为历史run保留，新A/B-10000均从原始Infinite-World重新初始化 |
 | DEC-019 | 2026-08-03 | Accepted | Stage One 1.0正式训练改为1000 effective optimizer steps、effective batch size 16（A: micro=1×accum=16；B: micro=2×accum=8），每100 effective steps保存完整checkpoint；A/B均from scratch从原始Infinite-World初始化，不加载旧RE10K或旧A/B-10000 checkpoint；其余显存继续并行准备full_episodes_v1 latent |

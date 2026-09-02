@@ -5,7 +5,7 @@
 | 文档 ID | `NAV-MDL-002` |
 | 类型 | Ablation 模型与训练接口 |
 | 状态 | Active / Full-chain implemented |
-| 更新时间 | 2026-09-02 |
+| 更新时间 | 2026-09-03 |
 | 职责 | 记录 GigaWorld-Policy 风格导航 ablation 的结构、输入输出、权重和运行入口 |
 
 ## 当前结论与入口
@@ -93,9 +93,9 @@ obs_latent       [B, 16, 4, 56, 112]   # 一个 T_latent=4 的当前观测 chunk
 text_embedding   [B, 1, 512, 4096]    # UMT5；指令缺失时使用 empty embedding
 text_mask        [B, 512]
 state            [B, 1, 14]           # R2R 无 proprioception，显式全 0
-action_noise     [B, 48, 14]          # Giga p=48 action slot；本 ablation 为 0 query
-action_target    [B, 48]              # 四类 R2R action id
-action_loss_mask [B, 48]
+action_noise     [B, 8, 14]           # 当前导航设置；Giga 原生 p=48
+action_target    [B, 8]               # 四类 R2R action id
+action_loss_mask [B, 8]
 ```
 
 `obs_latent` 的第一个 temporal latent 是 clean reference visual，后三个 temporal
@@ -113,7 +113,7 @@ NAV/data/train/r2r_ce/t4_micro_latents_stoppad_20260822_1605/
 Wan block 接收的顺序为：
 
 ```text
-[ state(1) | reference visual patches | action slots(48) | noisy future visual patches ]
+[ state(1) | reference visual patches | action slots(8) | noisy future visual patches ]
 ```
 
 其中：
@@ -134,33 +134,43 @@ Giga action-only 推理所需的因果方向。
 ### 输出与监督
 
 ```text
-shared_action_hidden [B,48,1536]
+shared_action_hidden [B,8,1536]
   -> LayerNorm + Linear(1536,4)
-  -> action_logits [B,48,4]
+  -> action_logits [B,8,4]
   -> masked CE(action_logits, action_target)
 ```
 
 训练时反向梯度会经过 policy head、action/state projector、Wan action token、共享
 Wan blocks、patch/text/time 模块和 visual patch stem；因此不是“冻结 backbone +
-旁路小 head”的结果。推理时只执行一次 shared Wan forward 并直接读 48 个 action
+旁路小 head”的结果。推理时只执行一次 shared Wan forward 并直接读 8 个 action
 slot，跳过 video unpatchify/head。
 
 ## 训练设定
 
-默认设置对齐 GigaWorld-Policy-0 的训练量纲：`action_horizon=48`、`lr=6e-5`、
-`weight_decay=1e-2`、`batch_size` 由命令行指定。由于当前环境不保证
+默认训练设置保留 GigaWorld-Policy-0 的优化量纲（`lr=6e-5`、`weight_decay=1e-2`），
+导航 action horizon 固定为 `8`；Giga 原生 `p=48` 作为参考配置保留在接口中。
+当前正式训练使用物理 `batch_size=1`、`gradient_accumulation_steps=32`，因此有效
+batch size（EBS）为 **32**；模型结构和每个 micro-batch 的计算不因梯度累积改变。
+`weight_decay=1e-2`、物理 `batch_size` 和累积步数均由命令行指定。由于当前环境不保证
 `CAME8Bit`，本地入口使用等价可复现的 `AdamW`；这属于 optimizer 实现替换，
 不改变 token 或 loss 结构。训练样本由 `GigaNavR2RBatchBuilder` 从 canonical
 R2R loader 逐批抽取，并保持 history/window 的真实采样，不复制 latent 文件。
 
+正式训练通过 `scripts/run_giga_nav_train.sh` 启动。该入口固定激活
+`virtual_env/.venv_infinite_world`，优先使用 `flash_attn`；若运行环境没有可用的
+FlashAttention，Wan DiT 自动退回 PyTorch SDPA（`sdpa_fallback`），不会改变模型结构。
+
 正式长训示例：
 
 ```bash
-python scripts/train_giga_nav.py \
-  --device cuda:1 --batch-size 1 --action-horizon 48 \
-  --steps 6000 --save-interval 1000 \
-  --output log/giga_nav_wan21_13b
+bash scripts/run_giga_nav_train.sh \
+  --device cuda:0 --batch-size 1 --action-horizon 8 \
+  --grad-accumulation-steps 32 --steps 6000 --save-interval 1000 \
+  --output log/giga_nav_wan21_h8_ebs32
 ```
+
+其中 `CUDA_VISIBLE_DEVICES=1` 时进程内的 GPU1 映射为 `cuda:0`；不要同时把物理
+GPU0 的既有任务迁移到这个训练进程。
 
 ## 验证状态与限制
 

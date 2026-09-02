@@ -25,7 +25,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lr", type=float, default=6e-5)
     parser.add_argument("--device", default="cuda:1")
     parser.add_argument("--output", type=Path, default=ROOT / "log/giga_nav_wan21_13b")
-    parser.add_argument("--action-horizon", type=int, default=48)
+    parser.add_argument("--action-horizon", type=int, default=8)
+    parser.add_argument("--grad-accumulation-steps", type=int, default=32)
     parser.add_argument("--max-episodes", type=int, default=0)
     parser.add_argument("--resume", type=Path, default=None)
     parser.add_argument("--save-interval", type=int, default=1000)
@@ -55,20 +56,26 @@ def main() -> None:
     report = model.structural_report()
     report["initialization_audit"] = init_audit
     report["data_summary"] = data.summary()
-    report["optimizer"] = {"name": "AdamW", "lr": args.lr, "weight_decay": 1e-2, "effective_batch_size": args.batch_size}
+    if args.grad_accumulation_steps < 1:
+        raise ValueError("--grad-accumulation-steps must be >= 1")
+    report["optimizer"] = {"name": "AdamW", "lr": args.lr, "weight_decay": 1e-2, "physical_batch_size": args.batch_size, "gradient_accumulation_steps": args.grad_accumulation_steps, "effective_batch_size": args.batch_size * args.grad_accumulation_steps}
     (args.output / "config_and_structure.json").write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str))
     with (args.output / "train.jsonl").open("a", encoding="utf-8") as log:
         for step in range(start_step + 1, args.steps + 1):
             tic = time.perf_counter()
-            batch, meta = data.next_batch(device=device, dtype=dtype)
             optimizer.zero_grad(set_to_none=True)
-            with torch.autocast(device_type=device.type, dtype=dtype, enabled=device.type == "cuda"):
-                output = model.forward_policy(obs_latent=batch["obs_latent"], text_embedding=batch["text_embedding"], text_mask=batch["text_mask"], state=batch["state"], action_noise=batch["action_noise"])
-                losses = model.loss(output, batch["action_target"], batch["action_loss_mask"])
-            losses["loss"].backward()
+            meta = {}
+            loss_value = 0.0
+            for micro_step in range(args.grad_accumulation_steps):
+                batch, meta = data.next_batch(device=device, dtype=dtype)
+                with torch.autocast(device_type=device.type, dtype=dtype, enabled=device.type == "cuda"):
+                    output = model.forward_policy(obs_latent=batch["obs_latent"], text_embedding=batch["text_embedding"], text_mask=batch["text_mask"], state=batch["state"], action_noise=batch["action_noise"])
+                    losses = model.loss(output, batch["action_target"], batch["action_loss_mask"])
+                (losses["loss"] / args.grad_accumulation_steps).backward()
+                loss_value += float(losses["loss"].detach().cpu()) / args.grad_accumulation_steps
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), float("inf"))
             optimizer.step()
-            record = {"step": step, "loss": float(losses["loss"].detach().cpu()), "grad_norm": float(grad_norm.detach().cpu()), "step_seconds": time.perf_counter() - tic, "history_micro": meta.get("history_micro"), "sample_ids": meta.get("sample_ids")}
+            record = {"step": step, "loss": loss_value, "grad_norm": float(grad_norm.detach().cpu()), "step_seconds": time.perf_counter() - tic, "micro_steps": args.grad_accumulation_steps, "effective_batch_size": args.batch_size * args.grad_accumulation_steps, "history_micro": meta.get("history_micro"), "sample_ids": meta.get("sample_ids")}
             log.write(json.dumps(record, ensure_ascii=False) + "\n")
             log.flush()
             if step == 1 or step % 50 == 0:

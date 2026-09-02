@@ -4,7 +4,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export PYTHONPATH="$ROOT/src:${PYTHONPATH:-}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-1}"
 OUT="${OUT:-$ROOT/log/giga_nav_smoke_$(date +%Y%m%d_%H%M%S)}"
-python "$ROOT/scripts/train_giga_nav.py" --steps 1 --batch-size 1 --action-horizon 48 --device cuda:0 --output "$OUT"
+PYTHON_BIN="${PYTHON_BIN:-python}"
+echo "attention backend is selected by: $PYTHON_BIN" >&2
+"$PYTHON_BIN" "$ROOT/scripts/train_giga_nav.py" --steps 1 --batch-size 1 --grad-accumulation-steps 1 --action-horizon 8 --device cuda:0 --output "$OUT"
 python - "$OUT/config_and_structure.json" <<'PY'
 import json, sys
 r=json.load(open(sys.argv[1]))

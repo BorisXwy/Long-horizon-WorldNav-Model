@@ -115,6 +115,12 @@ class GigaNavModel(nn.Module):
             num_layers=self.cfg.num_layers,
             use_convenc=False,
         )
+        dit_module = sys.modules["infworld.models.dit_model"]
+        self.attention_backend = (
+            "flash_attn"
+            if (dit_module.FLASH_ATTN_2_AVAILABLE or dit_module.FLASH_ATTN_3_AVAILABLE)
+            else "sdpa_fallback"
+        )
         self.state_projector = _ActionProjector(
             self.cfg.state_input_dim,
             self.cfg.action_mlp_dim,
@@ -276,10 +282,11 @@ class GigaNavModel(nn.Module):
             "backbone_parameter_count": backbone,
             "backbone_hidden_dim": self.cfg.hidden_dim,
             "backbone_layers": self.cfg.num_layers,
+            "attention_backend": self.attention_backend,
             "obs_structure": "[B,16,4,56,112] T4 latent; first latent is clean reference, last 3 are future slots",
-            "token_order": "[state(1), reference_visual, action(48), noisy_future_visual]",
+            "token_order": f"[state(1), reference_visual, action({self.cfg.action_horizon}), noisy_future_visual]",
             "text_structure": "UMT5 [B,1,512,4096] through Wan text cross-attention",
-            "action_structure": "zero action query slots [B,48,14] -> shared Wan hidden -> Linear -> [B,48,4]",
+            "action_structure": f"zero action query slots [B,{self.cfg.action_horizon},14] -> shared Wan hidden -> Linear -> [B,{self.cfg.action_horizon},4]",
             "policy_only": True,
             "initialization": "official Wan2.1-1.3B shape-compatible keys; new state/action projectors and nav head fresh",
             "giga_native_deviations": [

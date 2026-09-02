@@ -11,10 +11,9 @@ from typing import Any
 class GigaNavConfig:
     """Native Wan2.1 geometry plus Giga-style policy token settings.
 
-    ``action_horizon=48`` follows GigaWorld-Policy's p=48 setting.  R2R
-    samples are padded with terminal STOP labels by the existing canonical
-    loader; ``--action-horizon`` can be lowered for a controlled navigation
-    ablation without changing the backbone.
+    ``action_horizon=8`` is the current navigation setting.  GigaWorld's
+    native p=48 remains documented as the reference; lowering the number of
+    action slots changes only the policy target/readout, not the backbone.
     """
 
     backbone_checkpoint: Path = Path("/sharedata/Wan2.1-T2V-1.3B/diffusion_pytorch_model.safetensors")
@@ -32,7 +31,7 @@ class GigaNavConfig:
     text_length: int = 512
     action_input_dim: int = 14
     state_input_dim: int = 14
-    action_horizon: int = 48
+    action_horizon: int = 8
     num_nav_classes: int = 4
     action_mlp_dim: int = 256
     state_tokens: int = 1
