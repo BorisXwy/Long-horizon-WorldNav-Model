@@ -172,6 +172,20 @@ bash scripts/run_giga_nav_train.sh \
 其中 `CUDA_VISIBLE_DEVICES=1` 时进程内的 GPU1 映射为 `cuda:0`；不要同时把物理
 GPU0 的既有任务迁移到这个训练进程。
 
+### 当前实际速度
+
+在同一张 RTX 6000 Ada、同一真实 R2R batch、H=8 的完整 Wan forward/backward
+路径上测得：虚拟环境 `torch 2.6.0+cu124 + flash_attn 2.7.4.post1` 的单
+micro-step 为 1.508s（首次）以及 1.280s、1.208s（warm，平均约 1.24s）；系统
+环境的 `sdpa_fallback` 为 2.126s（首次）以及 1.242s、1.239s（warm，平均约
+1.24s）。因此 FlashAttention 已正确启用，但在当前 token 几何下端到端总时延主要
+由 Wan 其他模块、数据和反向计算决定，不能把 attention kernel 的局部加速直接等同
+为同等比例的训练加速。
+
+正式 EBS32（32 个 micro-step）实测 optimizer step 为 38.67s、40.85s；峰值显存
+约 48.3 GiB。启动器设置 `expandable_segments:True` 以避免第二个 optimizer step
+的临时 RoPE 张量因显存碎片触发 OOM。
+
 ## 验证状态与限制
 
 已验证：
