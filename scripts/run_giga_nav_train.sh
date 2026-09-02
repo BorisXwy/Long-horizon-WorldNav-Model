@@ -21,4 +21,8 @@ else
 fi
 export PYTHONPATH="$ROOT/src:${PYTHONPATH:-}"
 export PYTHONUNBUFFERED=1
+# Gradient accumulation keeps most gradients resident for the whole EBS.
+# Expandable CUDA segments avoid a small RoPE temporary allocation failing at
+# the allocator boundary on the 48-GiB RTX 6000 Ada.
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 exec "$ENV_ROOT/bin/python" "$ROOT/scripts/train_giga_nav.py" "$@"
