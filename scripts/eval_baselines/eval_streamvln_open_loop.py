@@ -346,6 +346,9 @@ def main() -> None:
         annotations = json.load(handle)
     if args.max_episodes > 0:
         annotations = annotations[: args.max_episodes]
+    random.seed(20260902)
+    np.random.seed(20260902)
+    torch.manual_seed(20260902)
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
     dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
     model, tokenizer = build_model(args.model_path, device, dtype, args.model_max_length)
