@@ -4,7 +4,7 @@
 | --- | --- |
 | 文档 ID | `NAV-MDL-002` |
 | 类型 | Ablation 模型与训练接口 |
-| 状态 | Active / 已有 checkpoint 的滚动窗口闭环评测 |
+| 状态 | Active / 已有 checkpoint 的滚动窗口闭环评测完成 |
 | 更新时间 | 2026-09-05 |
 | 职责 | 记录 GigaWorld-Policy 风格导航 ablation 的结构、输入输出、权重和运行入口 |
 
@@ -295,6 +295,31 @@ early 的 route-direction cosine 为 0.747、同向位移比例 75%，middle/lat
 分析链路，不作为 20-episode 聚合结论。
 【已验证→`result/giga_nav/step5000_r2r_train_rolling13_codecheck2_20260905/summary.json`】
 
+同一 `step_005000.pt` 的 R2R-train 前 20 条完整聚合结果如下：
+
+| 指标 | 结果 |
+| --- | ---: |
+| SR / SPL | 0.0% / 0.0% |
+| Oracle Success | 5.0%（1/20） |
+| Navigation Error | 11.530 m |
+| 平均步数 | 500 |
+| STOP / FORWARD / LEFT / RIGHT | 0 / 9,491 / 102 / 407 |
+
+| 对齐阶段 | Action agreement | Goal progress | Path deviation | Direction cosine | 同向位移比例 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Early | 50.12% | -0.461 m | 2.278 m | -0.076 | 32.02% |
+| Middle | 70.75% | -0.539 m | 2.986 m | 0.004 | 42.23% |
+| Late | 49.74% | -0.596 m | 3.376 m | -0.203 | 24.68% |
+
+20 条中，early 只有 8 条实现正 goal progress、7 条 direction cosine 为正；middle
+分别为 6/8 条，late 为 2/4 条。模型 94.91% 的输出为 MOVE_FORWARD，且 10,000
+步没有一次 STOP，因此 middle 70.75% action agreement 主要受 teacher action 的
+前进多数类影响，不能解释为正确方向跟随。更直接的 goal progress 三段均为负，path
+deviation 从 2.278 m 增至 3.376 m，说明聚合意义下前中期没有稳定沿目标路径推进，
+后期继续恶化。唯一 Oracle Success episode 是 ep1，但未 STOP，最终仍以 8.793 m
+Navigation Error 结束。
+【已验证→`result/giga_nav/step5000_r2r_train_rolling13_full20_20260905/summary.json`】
+
 ## 验证状态与限制
 
 已验证：
@@ -310,11 +335,12 @@ early 的 route-direction cosine 为 0.747、同向位移比例 75%，middle/lat
   SR/SPL/Oracle Success 均为 0，NE=10.519 m；该结果已标记为错误的当前单帧协议诊断。
 - 闭环 server 会从 checkpoint 的原始 data config 自动识别 `+12`，采用滚动 13 帧
   输入；不会要求用户手工选择容易出错的模式。
+- 已有 step5000 checkpoint 的 R2R-train 前 20 条滚动窗口评测完成；SR=0、Oracle
+  Success=5%，三段平均 goal progress 均为负。
 
 尚未验证：
 
-- R2R-train 全量与 `val_unseen` 全量 closed-loop success rate；
-- 已有 step5000 checkpoint 在滚动 13 帧协议下的 early/middle/late 方向跟随指标；
+- R2R-train 全量及 `val_unseen` 全量的滚动窗口闭环指标；
 - Giga 原生连续 action flow 与离散 R2R head 的公平数值对比；
 - 将真实 future visual latent 接回并进行 video/action co-training。
 
