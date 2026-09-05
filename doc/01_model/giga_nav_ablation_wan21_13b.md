@@ -4,8 +4,8 @@
 | --- | --- |
 | 文档 ID | `NAV-MDL-002` |
 | 类型 | Ablation 模型与训练接口 |
-| 状态 | Active / Full-chain implemented |
-| 更新时间 | 2026-09-03 |
+| 状态 | Active / Full-chain and train closed-loop evaluated |
+| 更新时间 | 2026-09-05 |
 | 职责 | 记录 GigaWorld-Policy 风格导航 ablation 的结构、输入输出、权重和运行入口 |
 
 ## 当前结论与入口
@@ -31,6 +31,13 @@ bash scripts/smoke_giga_nav.sh                         # 完整一批真实 R2R 
 python scripts/train_giga_nav.py --device cuda:1      # 正式训练入口
 python scripts/eval_giga_nav.py --checkpoint <ckpt> \
   --device cuda:1 --batches 20 --output result/giga_nav/<name>.json
+# Habitat 与 GigaNav 分属两个虚拟环境，由该入口自动启动完整推理服务
+cd ../StreamVLN
+CUDA_VISIBLE_DEVICES=0 ../virtual_env/.venv_streamvln/bin/python \
+  ../NAV/scripts/eval_giga_nav_closed_loop.py \
+  --checkpoint ../NAV/log/<run>/step_005000.pt \
+  --split train --max-episodes 20 \
+  --output ../NAV/result/giga_nav/<name>
 ```
 
 ## 设计边界：保留项与唯一必要改动
@@ -62,8 +69,8 @@ ablation，用来回答“共享 Wan backbone 直接改造成 policy 是否能�
 | 部分 | 参数量 |
 | --- | ---: |
 | Wan2.1-1.3B shared backbone（含其原生 patch/time/text/head） | 1,421,370,432 |
-| 新增 state/action projector + 4 类 policy head | 1,016,324 |
-| GigaNavModel 总计 | **1,422,386,756** |
+| 新增 state/action projector + 4 类 policy head（H=8） | 954,884 |
+| GigaNavModel 总计 | **1,422,325,316** |
 
 统计脚本写入 `log/giga_nav_smoke_20260902_retry2/config_and_structure.json`，口径为
 `sum(parameter.numel())`，未把 optimizer states 计入。
@@ -186,6 +193,45 @@ micro-step 为 1.508s（首次）以及 1.280s、1.208s（warm，平均约 1.24s
 约 48.3 GiB。启动器设置 `expandable_segments:True` 以避免第二个 optimizer step
 的临时 RoPE 张量因显存碎片触发 OOM。
 
+## Step5000 R2R-train 闭环评测
+
+2026-09-05 使用 `step_005000.pt` 在 R2R `train` split 的前 20 条 episode 上完成
+Habitat 在线闭环评测。每个环境 step 都从当前 RGB 经 Wan causal VAE 得到一个
+clean reference latent，补三个全零 future latent plane 以保持 `[B,16,4,56,112]`
+接口；模型预测 H=8，但只执行第一个动作，随后读取新 observation 重新规划。
+
+单帧 encode 与训练缓存的第一 latent plane 语义一致：Wan VAE 的 causal encode
+明确按 `[1,4,4,...]` 帧分组，第一 latent 只由第一帧产生；同时当前
+`GigaNavModel.forward_policy()` 只读取 `obs_latent[:,:,:1]`，后三个 temporal plane
+被显式置零。因此该评测没有省略 policy 实际可见的视觉信息，也暴露出此 ablation
+实际上没有使用 13 帧 observation chunk 或历史 Register。
+
+| 指标（20-episode 子集） | 结果 |
+| --- | ---: |
+| Success Rate (SR) | **0.0%** |
+| SPL | **0.0%** |
+| Oracle Success | **0.0%** |
+| Navigation Error (NE) | **10.519 m** |
+| 平均环境步数 | **477.5** |
+| 总动作数 | 9,550 |
+| STOP / FORWARD / LEFT / RIGHT | 1 / 8,025 / 752 / 772 |
+
+动作比例为 STOP 0.01%、MOVE_FORWARD 84.03%、TURN_LEFT 7.87%、TURN_RIGHT 8.08%。
+只有 1 条 episode 主动 STOP（第 50 步、NE=4.49 m），其余大多跑满 500 步。
+主要失败模式是持续前进撞墙，或 TURN_LEFT/TURN_RIGHT 周期；20 条轨迹均未进入过
+成功半径，说明失败不只是 STOP calibration，而是缺少能打破 observation-action
+循环的历史状态与闭环恢复能力。
+
+推理使用相同 RGB 的精确哈希缓存：这只复用同一 episode 内完全相同 observation
+对应的确定性完整模型输出，不改变动作。9,550 步中 9,034 次为缓存命中，516 次
+执行新前向。对 516 次新前向按 step 加权统计：预处理约 3.05 ms、Wan VAE 约
+62.21 ms、GigaNav policy forward 约 476.68 ms。结果文件：
+`result/giga_nav/step5000_r2r_train_closed_loop20_20260905/{summary.json,episodes.jsonl}`。
+
+该结果与同一 checkpoint 的训练窗口开环 Accuracy 91.50%、Macro-F1 88.86% 形成
+直接反差：teacher-trajectory action classification 已拟合，但不能据此推断闭环导航
+能力。【已验证→`result/giga_nav/step5000_r2r_train_closed_loop20_20260905/summary.json`】
+
 ## 验证状态与限制
 
 已验证：
@@ -197,10 +243,12 @@ micro-step 为 1.508s（首次）以及 1.280s、1.208s（warm，平均约 1.24s
 - checkpoint 恢复后 action-only inference 和 masked accuracy 入口通过一批真实窗口
   （`result/giga_nav/smoke_eval_step1.json`）；该随机/一步 checkpoint 的 66.67%
   只证明推理链路，不代表训练后导航指标。
+- step5000 在 R2R-train 前 20 条 episode 上完成 first-action Habitat 闭环评测；
+  SR/SPL/Oracle Success 均为 0，NE=10.519 m。
 
 尚未验证：
 
-- 长训练后的 R2R closed-loop success rate；
+- R2R-train 全量与 `val_unseen` 全量 closed-loop success rate；
 - Giga 原生连续 action flow 与离散 R2R head 的公平数值对比；
 - 将真实 future visual latent 接回并进行 video/action co-training。
 
