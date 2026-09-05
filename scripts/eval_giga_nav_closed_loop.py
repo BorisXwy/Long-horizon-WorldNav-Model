@@ -30,6 +30,137 @@ def average(rows: list[dict], key: str) -> float:
     return float(np.mean([float(row[key]) for row in rows])) if rows else 0.0
 
 
+def point_to_polyline_distance(position: list[float], reference_path: list[list[float]]) -> float:
+    point = np.asarray([position[0], position[2]], dtype=np.float64)
+    path = np.asarray([[value[0], value[2]] for value in reference_path], dtype=np.float64)
+    if len(path) == 1:
+        return float(np.linalg.norm(point - path[0]))
+    best = float("inf")
+    for start, end in zip(path[:-1], path[1:]):
+        segment = end - start
+        scale = float(np.dot(segment, segment))
+        alpha = 0.0 if scale == 0.0 else float(np.clip(np.dot(point - start, segment) / scale, 0.0, 1.0))
+        best = min(best, float(np.linalg.norm(point - (start + alpha * segment))))
+    return best
+
+
+def local_route_direction(position: list[float], reference_path: list[list[float]]) -> np.ndarray | None:
+    """Return the ordered GT segment direction nearest to an agent position."""
+
+    point = np.asarray([position[0], position[2]], dtype=np.float64)
+    path = np.asarray([[value[0], value[2]] for value in reference_path], dtype=np.float64)
+    best_distance = float("inf")
+    best_direction = None
+    for start, end in zip(path[:-1], path[1:]):
+        segment = end - start
+        scale = float(np.dot(segment, segment))
+        if scale <= 1e-12:
+            continue
+        alpha = float(np.clip(np.dot(point - start, segment) / scale, 0.0, 1.0))
+        distance = float(np.linalg.norm(point - (start + alpha * segment)))
+        if distance < best_distance:
+            best_distance = distance
+            best_direction = segment / np.sqrt(scale)
+    return best_direction
+
+
+def phase_metrics(
+    predicted_actions: list[int],
+    target_actions: list[int],
+    positions: list[list[float]],
+    distances_to_goal: list[float],
+    reference_path: list[list[float]],
+) -> dict[str, dict]:
+    horizon = len(target_actions)
+    boundaries = [0, horizon // 3, (2 * horizon) // 3, horizon]
+    output = {}
+    for name, start, end in zip(("early", "middle", "late"), boundaries[:-1], boundaries[1:]):
+        available_end = min(end, len(predicted_actions))
+        compared = max(0, available_end - start)
+        correct = sum(
+            int(predicted_actions[index] == target_actions[index])
+            for index in range(start, available_end)
+        )
+        state_start = min(start, len(positions) - 1)
+        state_end = min(end, len(positions) - 1)
+        deviations = [
+            point_to_polyline_distance(positions[index], reference_path)
+            for index in range(state_start, state_end + 1)
+        ]
+        direction_cosines = []
+        for index in range(state_start, state_end):
+            displacement = np.asarray(
+                [
+                    positions[index + 1][0] - positions[index][0],
+                    positions[index + 1][2] - positions[index][2],
+                ],
+                dtype=np.float64,
+            )
+            norm = float(np.linalg.norm(displacement))
+            reference_direction = local_route_direction(positions[index], reference_path)
+            if norm > 1e-5 and reference_direction is not None:
+                direction_cosines.append(float(np.dot(displacement / norm, reference_direction)))
+        output[name] = {
+            "target_action_range": [start, end],
+            "compared_actions": compared,
+            "action_accuracy": float(correct) / max(compared, 1),
+            "distance_to_goal_start": float(distances_to_goal[state_start]),
+            "distance_to_goal_end": float(distances_to_goal[state_end]),
+            "goal_progress": float(distances_to_goal[state_start] - distances_to_goal[state_end]),
+            "mean_euclidean_deviation_to_reference_path": float(np.mean(deviations)),
+            "movement_steps": len(direction_cosines),
+            "mean_route_direction_cosine": (
+                float(np.mean(direction_cosines)) if direction_cosines else 0.0
+            ),
+            "forward_route_direction_ratio": (
+                float(np.mean(np.asarray(direction_cosines) > 0.0)) if direction_cosines else 0.0
+            ),
+        }
+    return output
+
+
+def save_trajectory_plot(
+    output: Path,
+    positions: list[list[float]],
+    reference_path: list[list[float]],
+    expert_horizon: int,
+    title: str,
+) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    predicted = np.asarray(positions)
+    reference = np.asarray(reference_path)
+    first = min(expert_horizon // 3, len(predicted) - 1)
+    second = min((2 * expert_horizon) // 3, len(predicted) - 1)
+    third = min(expert_horizon, len(predicted) - 1)
+    figure, axis = plt.subplots(figsize=(7, 7))
+    axis.plot(reference[:, 0], reference[:, 2], "k--o", linewidth=2, markersize=3, label="GT reference")
+    segments = [
+        (0, first, "tab:blue", "pred early"),
+        (first, second, "tab:orange", "pred middle"),
+        (second, third, "tab:green", "pred late"),
+        (third, len(predicted) - 1, "tab:red", "pred after GT horizon"),
+    ]
+    for start, end, color, label in segments:
+        if end > start:
+            axis.plot(predicted[start : end + 1, 0], predicted[start : end + 1, 2], color=color, linewidth=2, label=label)
+    axis.scatter(predicted[0, 0], predicted[0, 2], c="lime", edgecolors="black", s=70, label="start", zorder=5)
+    axis.scatter(reference[-1, 0], reference[-1, 2], c="gold", edgecolors="black", s=90, marker="*", label="goal", zorder=5)
+    axis.set_aspect("equal", adjustable="datalim")
+    axis.set_xlabel("Matterport x (m)")
+    axis.set_ylabel("Matterport z (m)")
+    axis.set_title(title)
+    axis.grid(alpha=0.25)
+    axis.legend(fontsize=8)
+    figure.tight_layout()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(output, dpi=160)
+    plt.close(figure)
+
+
 def wait_for_socket(path: Path, process: subprocess.Popen, timeout: float = 300.0) -> None:
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -51,6 +182,11 @@ def main() -> None:
     parser.add_argument("--model-python", type=Path, default=DEFAULT_MODEL_PYTHON)
     parser.add_argument("--habitat-config", type=Path, default=STREAMVLN_ROOT / "config/vln_r2r.yaml")
     parser.add_argument("--text-cache-root", type=Path, default=ROOT / "data/train/r2r_ce/text_embeddings_stoppad_20260822_1605/r2r_ce")
+    parser.add_argument(
+        "--ground-truth-action-root",
+        type=Path,
+        default=Path("/sharedata/NAV/derived/v1/vln/raw_policy/20260810_030728/actions/r2r_ce/standard"),
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--socket", type=Path, default=Path("/tmp/nav_giga_closed_loop.sock"))
     args = parser.parse_args()
@@ -102,6 +238,12 @@ def main() -> None:
             text_path = args.text_cache_root / f"{sample_id}.pt"
             if not text_path.is_file():
                 raise FileNotFoundError(f"missing instruction embedding: {text_path}")
+            ground_truth_path = args.ground_truth_action_root / args.split / f"ep{episode_id}.json"
+            if not ground_truth_path.is_file():
+                raise FileNotFoundError(f"missing ground-truth action trace: {ground_truth_path}")
+            ground_truth = json.loads(ground_truth_path.read_text())
+            target_actions = [int(value) for value in ground_truth["gt_actions"]]
+            reference_path = [[float(value) for value in point] for point in ground_truth["reference_path"]]
             env.current_episode = episode
             observation = env.reset()
             connection.send({"command": "reset", "episode_id": episode_id, "text_embedding": str(text_path)})
@@ -113,6 +255,9 @@ def main() -> None:
             episode_actions: Counter[int] = Counter()
             latency_rows: list[dict] = []
             cache_hits = 0
+            predicted_actions: list[int] = []
+            positions = [env.sim.get_agent_state().position.astype(float).tolist()]
+            distances_to_goal = [float(env.get_metrics()["distance_to_goal"])]
             while not env.episode_over:
                 connection.send({"command": "infer", "rgb": np.asarray(observation["rgb"], dtype=np.uint8)})
                 reply = connection.recv()
@@ -121,6 +266,7 @@ def main() -> None:
                 action = int(reply["action"])
                 action_counts[action] += 1
                 episode_actions[action] += 1
+                predicted_actions.append(action)
                 cache_hits += int(reply.get("cache_hit", False))
                 latency_rows.append({
                     key: float(reply[key])
@@ -128,6 +274,8 @@ def main() -> None:
                 })
                 observation = env.step(action)
                 steps += 1
+                positions.append(env.sim.get_agent_state().position.astype(float).tolist())
+                distances_to_goal.append(float(env.get_metrics()["distance_to_goal"]))
                 if steps <= 3 or steps % 10 == 0:
                     print(
                         json.dumps(
@@ -145,6 +293,40 @@ def main() -> None:
                     )
 
             metrics = env.get_metrics()
+            phases = phase_metrics(
+                predicted_actions,
+                target_actions,
+                positions,
+                distances_to_goal,
+                reference_path,
+            )
+            trajectory_path = args.output / "trajectories" / f"ep{episode_id}.json"
+            trajectory_plot = args.output / "trajectories" / f"ep{episode_id}.png"
+            trajectory_path.parent.mkdir(parents=True, exist_ok=True)
+            trajectory_path.write_text(
+                json.dumps(
+                    {
+                        "episode_id": episode_id,
+                        "instruction": episode.instruction.instruction_text,
+                        "predicted_actions": predicted_actions,
+                        "target_actions": target_actions,
+                        "positions": positions,
+                        "distances_to_goal": distances_to_goal,
+                        "reference_path": reference_path,
+                        "phase_metrics": phases,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n"
+            )
+            save_trajectory_plot(
+                trajectory_plot,
+                positions,
+                reference_path,
+                len(target_actions),
+                f"R2R {args.split} ep{episode_id}",
+            )
             row = {
                 "episode_index": episode_index,
                 "episode_id": episode_id,
@@ -157,6 +339,10 @@ def main() -> None:
                 "distance_to_goal": float(metrics["distance_to_goal"]),
                 "action_counts": {str(key): int(value) for key, value in sorted(episode_actions.items())},
                 "inference_cache_hits": cache_hits,
+                "expert_action_horizon": len(target_actions),
+                "phase_metrics": phases,
+                "trajectory_path": str(trajectory_path),
+                "trajectory_plot": str(trajectory_plot),
                 "latency": {
                     key: average(latency_rows, key)
                     for key in ("preprocess_seconds", "vae_seconds", "policy_seconds", "total_seconds")
@@ -175,6 +361,19 @@ def main() -> None:
             for key in ("preprocess_seconds", "vae_seconds", "policy_seconds", "total_seconds")
         }
         action_total = sum(action_counts.values())
+        aggregate_phases = {
+            phase: {
+                metric: float(np.mean([row["phase_metrics"][phase][metric] for row in rows]))
+                for metric in (
+                    "action_accuracy",
+                    "goal_progress",
+                    "mean_euclidean_deviation_to_reference_path",
+                    "mean_route_direction_cosine",
+                    "forward_route_direction_ratio",
+                )
+            }
+            for phase in ("early", "middle", "late")
+        }
         summary = {
             "method": "GigaNav Wan2.1-1.3B H8",
             "checkpoint": str(args.checkpoint),
@@ -186,6 +385,7 @@ def main() -> None:
             "oracle_success": average(rows, "oracle_success"),
             "navigation_error": average(rows, "distance_to_goal"),
             "mean_steps": average(rows, "steps"),
+            "phase_metrics": aggregate_phases,
             "action_counts": {str(key): int(value) for key, value in sorted(action_counts.items())},
             "action_ratio": {
                 str(key): float(value) / max(action_total, 1)

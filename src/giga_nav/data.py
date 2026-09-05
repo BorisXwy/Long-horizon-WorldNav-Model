@@ -31,7 +31,12 @@ class GigaNavDataConfig:
     rendered_manifest: Path = Path("/sharedata/NAV/derived/v1/vln/rendered_obs/stage3_vln_render_r2r_train_stoppad_gpu0_20260822_1605/episodes/rendered_episodes.jsonl.gz")
     text_empty: Path = Path("/sharedata/RealEstate10K/nav_register/text/empty_umt5.pt")
     text_cache_root: Path = Path("/mnt/pool1/sharehome/xiewenyuan/academic/3d_wm_vln/NAV/data/train/r2r_ce/text_embeddings_stoppad_20260822_1605")
-    history_micro_choices: str = "1,2,3,4,5,6,7"
+    # GigaNav is a reactive reference-image ablation, not the Register model.
+    # K=0 enumerates every T4 micro chunk, including the episode start; the
+    # shared policy sees its first causal latent plane and predicts actions
+    # starting at that same reference-frame index.
+    history_micro_choices: str = "0"
+    action_label_alignment: str = "reference_frame"
     action_horizon: int = 8
     batch_size: int = 1
     max_episodes: int = 0
@@ -60,6 +65,7 @@ class GigaNavR2RBatchBuilder:
                 batch_size=cfg.batch_size,
                 max_episodes=cfg.max_episodes,
                 action_oversample_mode="none",
+                action_label_alignment=cfg.action_label_alignment,
                 require_text_cache=True,
                 seed=cfg.seed,
             )
@@ -90,7 +96,11 @@ class GigaNavR2RBatchBuilder:
             "state": torch.zeros(batch["z_obs"].shape[0], 1, 14, device=device, dtype=dtype),
             "action_noise": torch.zeros(batch["z_obs"].shape[0], self.cfg.action_horizon, 14, device=device, dtype=dtype),
         }
-        return batch, {**meta, "giga_action_target": "R2R combo mapped to STOP/MOVE_FORWARD/TURN_LEFT/TURN_RIGHT"}
+        return batch, {
+            **meta,
+            "giga_action_target": "R2R combo mapped to STOP/MOVE_FORWARD/TURN_LEFT/TURN_RIGHT",
+            "giga_temporal_alignment": self.cfg.action_label_alignment,
+        }
 
     def summary(self) -> dict[str, Any]:
         return {"adapter": "GigaNavR2RBatchBuilder", "base": self.base.summary(), "config": self.cfg.to_dict(), "action_names": ACTION_NAMES}

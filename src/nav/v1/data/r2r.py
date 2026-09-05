@@ -30,7 +30,6 @@ from nav.v1.data.stage2 import (
     FINAL_LATENT_W,
     FINAL_MICRO_FRAMES,
     FINAL_MICRO_STRIDE,
-    parse_csv_ints,
 )
 
 
@@ -87,6 +86,7 @@ class R2RStage3DataConfig:
     max_episodes: int = 0
     terminal_window_policy: str = "one_per_episode"
     action_oversample_mode: str = "none"
+    action_label_alignment: str = "after_observation_chunk"
     turn_copy_bonus: int = 2
     stop_copy_bonus: int = 2
     max_copy_factor: int = 10
@@ -151,9 +151,20 @@ class R2RStage3PolicyBatchBuilder:
     def __init__(self, cfg: R2RStage3DataConfig) -> None:
         self.cfg = cfg
         self.rng = random.Random(cfg.seed)
-        self.history_choices = parse_csv_ints(cfg.history_micro_choices)
-        if any(value <= 0 for value in self.history_choices):
-            raise ValueError("R2R Stage3 currently expects history_micro >= 1; K=0 start samples are handled separately later")
+        self.history_choices = [
+            int(value.strip())
+            for value in cfg.history_micro_choices.split(",")
+            if value.strip()
+        ]
+        if not self.history_choices:
+            raise ValueError("history_micro_choices must not be empty")
+        if any(value < 0 for value in self.history_choices):
+            raise ValueError("history_micro must be >= 0")
+        if cfg.action_label_alignment not in {"after_observation_chunk", "reference_frame"}:
+            raise ValueError(
+                "action_label_alignment must be 'after_observation_chunk' or 'reference_frame', "
+                f"got {cfg.action_label_alignment!r}"
+            )
         if cfg.terminal_window_policy != "one_per_episode":
             raise ValueError("only terminal_window_policy='one_per_episode' is currently supported")
         if cfg.action_oversample_mode not in {"none", "copy_rare_actions"}:
@@ -261,7 +272,10 @@ class R2RStage3PolicyBatchBuilder:
                     continue
                 for start_micro in range(max_start + 1):
                     obs_micro = start_micro + int(history_micro)
-                    label_start = obs_micro * FINAL_MICRO_STRIDE + (FINAL_MICRO_FRAMES - 1)
+                    if self.cfg.action_label_alignment == "reference_frame":
+                        label_start = obs_micro * FINAL_MICRO_STRIDE
+                    else:
+                        label_start = obs_micro * FINAL_MICRO_STRIDE + (FINAL_MICRO_FRAMES - 1)
                     if label_start > stop_index:
                         continue
                     is_terminal = label_start <= stop_index < label_start + self.cfg.action_horizon
@@ -452,7 +466,10 @@ class R2RStage3PolicyBatchBuilder:
             for micro_index in range(item.start_micro, item.start_micro + item.history_micro):
                 hist_start = micro_index * FINAL_MICRO_STRIDE + (FINAL_MICRO_FRAMES - 1)
                 hist_rows.append(self._action_window(actions, hist_start))
-            a_hist.append(torch.stack(hist_rows, dim=0))
+            if hist_rows:
+                a_hist.append(torch.stack(hist_rows, dim=0))
+            else:
+                a_hist.append(torch.empty(0, self.cfg.action_horizon, dtype=torch.long))
             target_combo = self._action_window(actions, item.label_start_action)
             action_combo.append(target_combo)
             action_masks.append(torch.ones(self.cfg.action_horizon, dtype=torch.float32))
@@ -513,8 +530,17 @@ class R2RStage3PolicyBatchBuilder:
             "terminal_windows": terminal,
             "nonterminal_windows": len(self.windows) - terminal,
             "history_micro_choices": self.history_choices,
-            "label_rule": "label_start = obs_micro * FINAL_MICRO_STRIDE + (FINAL_MICRO_FRAMES - 1)",
-            "target_semantics": "one future action chunk after Z_obs; repeated terminal padding chunks are not sampled",
+            "action_label_alignment": self.cfg.action_label_alignment,
+            "label_rule": (
+                "label_start = obs_micro * FINAL_MICRO_STRIDE"
+                if self.cfg.action_label_alignment == "reference_frame"
+                else "label_start = obs_micro * FINAL_MICRO_STRIDE + (FINAL_MICRO_FRAMES - 1)"
+            ),
+            "target_semantics": (
+                "one action chunk starting at the clean reference frame; repeated terminal padding chunks are not sampled"
+                if self.cfg.action_label_alignment == "reference_frame"
+                else "one future action chunk after Z_obs; repeated terminal padding chunks are not sampled"
+            ),
             "action_oversample": {
                 "mode": self.cfg.action_oversample_mode,
                 "turn_copy_bonus": self.cfg.turn_copy_bonus,

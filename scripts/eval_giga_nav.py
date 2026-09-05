@@ -33,6 +33,11 @@ def main() -> None:
         cfg_values["patch_size"] = tuple(cfg_values["patch_size"])
     cfg = GigaNavConfig(**cfg_values)
     data_values = {key: value for key, value in payload.get("data_config", {}).items() if key in data_keys}
+    # Checkpoints written before 2026-09-05 used the old +12-step target
+    # semantics.  Preserve their open-loop reproduction instead of silently
+    # evaluating them with the corrected reference-frame labels.
+    if "action_label_alignment" not in data_values:
+        data_values["action_label_alignment"] = "after_observation_chunk"
     for key in ("latent_manifest_dir", "rendered_manifest", "text_empty", "text_cache_root"):
         if key in data_values:
             data_values[key] = Path(data_values[key])

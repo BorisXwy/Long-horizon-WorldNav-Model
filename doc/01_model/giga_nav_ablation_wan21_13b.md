@@ -4,7 +4,7 @@
 | --- | --- |
 | 文档 ID | `NAV-MDL-002` |
 | 类型 | Ablation 模型与训练接口 |
-| 状态 | Active / Full-chain and train closed-loop evaluated |
+| 状态 | Active / reference-frame alignment v2 正在训练 |
 | 更新时间 | 2026-09-05 |
 | 职责 | 记录 GigaWorld-Policy 风格导航 ablation 的结构、输入输出、权重和运行入口 |
 
@@ -193,9 +193,55 @@ micro-step 为 1.508s（首次）以及 1.280s、1.208s（warm，平均约 1.24s
 约 48.3 GiB。启动器设置 `expandable_segments:True` 以避免第二个 optimizer step
 的临时 RoPE 张量因显存碎片触发 OOM。
 
-## Step5000 R2R-train 闭环评测
+## 训推时间语义对齐（alignment v2）
 
-2026-09-05 使用 `step_005000.pt` 在 R2R `train` split 的前 20 条 episode 上完成
+2026-09-05 的闭环检查发现，旧 dataloader 与 policy 实际可见输入相差 12 个环境步：
+`GigaNavModel.forward_policy()` 只读取 T4 latent 的第一个 causal plane，但旧标签从
+13-frame observation chunk 的末尾开始。因此旧模型实际学到的是“第 `12m` 帧预测
+第 `12m+12` 步起的动作”，而在线推理却用当前 RGB 预测当前动作。旧版 91.50%
+开环 Accuracy 由同一个错位 loader 测得，不能证明 current-observation policy 已
+拟合。
+
+对齐后的唯一语义如下：
+
+| 项目 | 旧版（legacy） | 当前 alignment v2 |
+| --- | --- | --- |
+| policy 可见视觉 | T4 chunk 第一个 latent plane，对应 frame `12m` | 相同 |
+| action label 起点 | `12m + 12` | **`12m`** |
+| history 选择 | `K=1..7`，但 GigaNav 不读取 history | **`K=0`**，枚举每个 T4 reference chunk |
+| 在线推理 | 当前 RGB -> T1 causal latent | 相同，并补 3 个零 plane 维持 T4 接口 |
+
+Wan causal VAE 的时间分组为 `[1,4,4,...]`，所以 T4/13-frame cache 的第一个 latent
+plane 只读取该 chunk 的第一帧；在线单帧 T1 encode 与训练输入遵循相同的因果边界。
+模型在训练和推理时都只读取这个 clean reference plane，预测 H=8 动作，并在闭环中
+执行第一个动作后用新 observation 重规划。训练采样仍以 12 帧 stride 枚举 reference
+state，但已经不存在输入—标签的 12-step 语义偏移。
+
+数值审计进一步用同一首帧、彼此独立的后续 12 帧，比较单帧 encode 与 13 帧 encode
+的第一个 plane：两者 shape 分别为 `[1,16,1,56,112]` 与 `[1,16,4,56,112]`，首
+plane 的 max/mean absolute difference 均为 **0.0**，`torch.equal=True`。
+【已验证→`result/giga_nav/reference_frame_alignment_v2_20260905/vae_causal_equivalence.json`】
+
+当前正式训练：
+
+```text
+log/giga_nav_wan21_h8_ebs32_alignment_v2_20260905/
+初始化：Wan2.1-T2V-1.3B 官方预训练权重
+优化：AdamW，lr=6e-5，weight_decay=1e-2
+batch：physical BS=1，gradient accumulation=32，EBS=32
+计划：6000 optimizer steps，每 1000 steps 保存
+TensorBoard：服务器端口 6044
+```
+
+完整 forward/backward/optimizer smoke 已通过；正式任务前 3 步 loss 分别为
+1.5655、1.7656、1.3150，optimizer step 为 41.3--45.3 秒。这里只证明训练链路稳定，
+模型质量从 step1000 checkpoint 起正式评测。
+【已验证→`log/giga_nav_alignment_v2_full_smoke1_gpu1_20260905/`；
+`log/giga_nav_wan21_h8_ebs32_alignment_v2_20260905/train.jsonl`】
+
+## Legacy 错位 checkpoint 的闭环诊断
+
+2026-09-05 使用旧版 `step_005000.pt` 在 R2R `train` split 的前 20 条 episode 上完成
 Habitat 在线闭环评测。每个环境 step 都从当前 RGB 经 Wan causal VAE 得到一个
 clean reference latent，补三个全零 future latent plane 以保持 `[B,16,4,56,112]`
 接口；模型预测 H=8，但只执行第一个动作，随后读取新 observation 重新规划。
@@ -228,9 +274,26 @@ clean reference latent，补三个全零 future latent plane 以保持 `[B,16,4,
 62.21 ms、GigaNav policy forward 约 476.68 ms。结果文件：
 `result/giga_nav/step5000_r2r_train_closed_loop20_20260905/{summary.json,episodes.jsonl}`。
 
-该结果与同一 checkpoint 的训练窗口开环 Accuracy 91.50%、Macro-F1 88.86% 形成
-直接反差：teacher-trajectory action classification 已拟合，但不能据此推断闭环导航
-能力。【已验证→`result/giga_nav/step5000_r2r_train_closed_loop20_20260905/summary.json`】
+该结果与同一 checkpoint 的旧窗口开环 Accuracy 91.50%、Macro-F1 88.86% 形成
+直接反差。进一步审计已经确认该开环窗口存在上述 +12-step 错位，因此这组结果只保留
+为 legacy 诊断，**不能作为 alignment v2 的导航结果**。
+【已验证→`result/giga_nav/step5000_r2r_train_closed_loop20_20260905/summary.json`】
+
+## 闭环前期/中期方向跟随评测
+
+新的闭环入口除 SR/SPL/NE 外，会把每条 episode 的 expert action horizon 等分为
+early、middle、late 三段，并分别记录：
+
+- first-action 与 teacher action 的时间前缀准确率；
+- 分段首尾 Navigation Error 的变化（goal progress）；
+- agent 轨迹到 GT reference polyline 的平均欧氏距离；
+- 实际发生位移的 step 与最近 GT 有向路径段之间的平均方向 cosine，以及同向比例；
+- GT 路径与预测 early/middle/late/post-horizon 轨迹叠图。
+
+这种口径优先回答模型在闭环误差尚未严重累积的前、中期是否跟随正确方向；后期因闭环
+状态已偏离 teacher trajectory，逐时刻 action 一致率只作诊断，不要求始终保持。每条
+轨迹写入 `result/giga_nav/<run>/trajectories/ep<ID>.{json,png}`。alignment v2 的正式
+数值将在首个 step1000 checkpoint 产生后填写，当前不使用 legacy checkpoint 冒充结果。
 
 ## 验证状态与限制
 
@@ -244,11 +307,14 @@ clean reference latent，补三个全零 future latent plane 以保持 `[B,16,4,
   （`result/giga_nav/smoke_eval_step1.json`）；该随机/一步 checkpoint 的 66.67%
   只证明推理链路，不代表训练后导航指标。
 - step5000 在 R2R-train 前 20 条 episode 上完成 first-action Habitat 闭环评测；
-  SR/SPL/Oracle Success 均为 0，NE=10.519 m。
+  SR/SPL/Oracle Success 均为 0，NE=10.519 m；该 checkpoint 已标记为旧标签错位诊断。
+- reference-frame alignment v2 的真实 batch 完整 forward/backward/optimizer update
+  已通过，并已启动 EBS32 正式训练。
 
 尚未验证：
 
 - R2R-train 全量与 `val_unseen` 全量 closed-loop success rate；
+- alignment v2 checkpoint 的 early/middle/late 方向跟随与轨迹指标；
 - Giga 原生连续 action flow 与离散 R2R head 的公平数值对比；
 - 将真实 future visual latent 接回并进行 video/action co-training。
 
