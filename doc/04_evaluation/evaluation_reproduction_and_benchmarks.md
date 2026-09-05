@@ -1231,6 +1231,12 @@ action noise + timestep -> forward_action_stack_with_prefix_cache
 
 
 > 合并自旧主题；原独立文件已并入本文，不再作为独立事实源维护。
+>
+> 2026-09-06 的 R2R-CE Val-Unseen 前十、Action Head、输出张量、loss 与闭环
+> controller 专项核验已独立维护在
+> [`r2r_ce_action_head_leaderboard_20260906.md`](r2r_ce_action_head_leaderboard_20260906.md)
+>（`NAV-EVL-012`）。该文档覆盖本节 2026-08 快照之后的 StereoNav、Robostral、
+> Qwen-RobotNav、TAMP-Nav 等更新；涉及 action interface 时以专项文档为准。
 
 
 | 字段 | 内容 |
@@ -1350,12 +1356,13 @@ Test SR/SPL 为60/52，因此它比只引用 Val-Unseen 的方法更适合作为
 - [BrainNav arXiv:2607.23181](https://arxiv.org/abs/2607.23181)
 - [StereoNav arXiv:2605.13328](https://arxiv.org/abs/2605.13328)
 
-#### 为什么不把81.1%直接写成 R2R-CE 最终 SOTA
+#### 为什么不把81.1%直接写成 instruction-only R2R-CE 最终 SOTA
 
-StereoNav 摘要给出 R2R-CE SR/SPL=81.1/68.3，但摘要没有明确说明是 Val-Unseen
-还是 Test、是否使用标准 RGB-D/panoramic 配置、是否采用额外视觉先验以及是否提交
-官方 leaderboard。它可以记录为“最新 self-reported claim”，但当前证据不足以替换
-60/52这一可追溯的 peer-reviewed Test 数字。
+StereoNav 的论文与官方代码现已确认该数字为 R2R-CE Val-Unseen 81.1/68.3
+（SR/SPL），但输入除 stereo RGB 与 instruction 外，还包含 fuzzy/precise
+`target-location prior`，并利用当前 pose 将目标先验持续渲染到视图中。因此它属于
+带额外目标位置提示的设置，不应替换 instruction-only 主表；同时 Val-Unseen 仍不能
+替换可追溯的官方 Test 数字。其 head 与完整口径见 `NAV-EVL-012`。
 
 同理，HSAN 的64/59是 Val-Unseen，不应与 NavMorph 的 Test 60/52直接比较高低。
 
@@ -1591,7 +1598,7 @@ Self-reported preprint claim
 
 | Benchmark | 可靠已发表高值 | 最新 preprint claim | 使用规则 |
 | --- | --- | --- | --- |
-| R2R-CE Val-Unseen | HSAN 64/59 SR/SPL | Qwen-RobotNav panoramic 8B 72.1/66.6；Robostral monocular 77.4 SR；StereoNav 81.1/68.3口径不清 | 按 sensor 分组，不替代 Test 主表 |
+| R2R-CE Val-Unseen | HSAN 64/59 SR/SPL | Qwen-RobotNav panoramic 8B 72.1/66.6；Robostral monocular 77.4/74.2；StereoNav 81.1/68.3但含 target-location prior | 按 sensor/target-prior 分组，不替代 Test 主表 |
 | RxR-CE Val-Unseen | HSAN 59/54 SR/SPL | Qwen-RobotNav panoramic 8B 76.5/65.7、monocular 8B 73.4/63.5；Robostral monocular 75.1 SR | 同时报告 NDTW/SDTW，按 sensor 分组 |
 
 #### NAV 的阶段性目标
