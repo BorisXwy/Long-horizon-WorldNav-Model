@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter
+from collections import Counter, deque
 import json
 from multiprocessing.connection import Client
 import os
@@ -70,9 +70,17 @@ def phase_metrics(
     positions: list[list[float]],
     distances_to_goal: list[float],
     reference_path: list[list[float]],
+    warmup_steps: int,
 ) -> dict[str, dict]:
     horizon = len(target_actions)
-    boundaries = [0, horizon // 3, (2 * horizon) // 3, horizon]
+    aligned_start = min(warmup_steps, horizon)
+    aligned_horizon = horizon - aligned_start
+    boundaries = [
+        aligned_start,
+        aligned_start + aligned_horizon // 3,
+        aligned_start + (2 * aligned_horizon) // 3,
+        horizon,
+    ]
     output = {}
     for name, start, end in zip(("early", "middle", "late"), boundaries[:-1], boundaries[1:]):
         available_end = min(end, len(predicted_actions))
@@ -124,6 +132,7 @@ def save_trajectory_plot(
     positions: list[list[float]],
     reference_path: list[list[float]],
     expert_horizon: int,
+    warmup_steps: int,
     title: str,
 ) -> None:
     import matplotlib
@@ -133,13 +142,16 @@ def save_trajectory_plot(
 
     predicted = np.asarray(positions)
     reference = np.asarray(reference_path)
-    first = min(expert_horizon // 3, len(predicted) - 1)
-    second = min((2 * expert_horizon) // 3, len(predicted) - 1)
+    aligned_start = min(warmup_steps, expert_horizon, len(predicted) - 1)
+    aligned_horizon = max(0, expert_horizon - aligned_start)
+    first = min(aligned_start + aligned_horizon // 3, len(predicted) - 1)
+    second = min(aligned_start + (2 * aligned_horizon) // 3, len(predicted) - 1)
     third = min(expert_horizon, len(predicted) - 1)
     figure, axis = plt.subplots(figsize=(7, 7))
     axis.plot(reference[:, 0], reference[:, 2], "k--o", linewidth=2, markersize=3, label="GT reference")
     segments = [
-        (0, first, "tab:blue", "pred early"),
+        (0, aligned_start, "tab:gray", "bootstrap"),
+        (aligned_start, first, "tab:blue", "pred early"),
         (first, second, "tab:orange", "pred middle"),
         (second, third, "tab:green", "pred late"),
         (third, len(predicted) - 1, "tab:red", "pred after GT horizon"),
@@ -219,6 +231,9 @@ def main() -> None:
         if ready.get("status") != "ready":
             raise RuntimeError(f"bad server handshake: {ready}")
         print(json.dumps({"event": "server_ready", **ready}, ensure_ascii=False), flush=True)
+        reference_delay = int(ready["training_reference_delay_steps"])
+        window_frames = int(ready["online_vae_input_frames"])
+        encoded_frames = int(ready["online_vae_encoded_frames"])
 
         config = get_habitat_config(str(args.habitat_config))
         with habitat.config.read_write(config):
@@ -255,11 +270,15 @@ def main() -> None:
             episode_actions: Counter[int] = Counter()
             latency_rows: list[dict] = []
             cache_hits = 0
+            rgb_history: deque[np.ndarray] = deque(maxlen=window_frames)
             predicted_actions: list[int] = []
             positions = [env.sim.get_agent_state().position.astype(float).tolist()]
             distances_to_goal = [float(env.get_metrics()["distance_to_goal"])]
             while not env.episode_over:
-                connection.send({"command": "infer", "rgb": np.asarray(observation["rgb"], dtype=np.uint8)})
+                current_rgb = np.asarray(observation["rgb"], dtype=np.uint8).copy()
+                rgb_history.append(current_rgb)
+                padded_window = [rgb_history[0]] * (window_frames - len(rgb_history)) + list(rgb_history)
+                connection.send({"command": "infer", "rgb_window": np.stack(padded_window, axis=0)})
                 reply = connection.recv()
                 if reply.get("status") != "ok":
                     raise RuntimeError(f"inference failed: {reply}")
@@ -299,6 +318,7 @@ def main() -> None:
                 positions,
                 distances_to_goal,
                 reference_path,
+                reference_delay,
             )
             trajectory_path = args.output / "trajectories" / f"ep{episode_id}.json"
             trajectory_plot = args.output / "trajectories" / f"ep{episode_id}.png"
@@ -314,6 +334,8 @@ def main() -> None:
                         "distances_to_goal": distances_to_goal,
                         "reference_path": reference_path,
                         "phase_metrics": phases,
+                        "training_reference_delay_steps": reference_delay,
+                        "bootstrap_action_range": [0, min(reference_delay, len(target_actions))],
                     },
                     ensure_ascii=False,
                     indent=2,
@@ -325,6 +347,7 @@ def main() -> None:
                 positions,
                 reference_path,
                 len(target_actions),
+                reference_delay,
                 f"R2R {args.split} ep{episode_id}",
             )
             row = {
@@ -340,6 +363,8 @@ def main() -> None:
                 "action_counts": {str(key): int(value) for key, value in sorted(episode_actions.items())},
                 "inference_cache_hits": cache_hits,
                 "expert_action_horizon": len(target_actions),
+                "training_reference_delay_steps": reference_delay,
+                "bootstrap_action_range": [0, min(reference_delay, len(target_actions))],
                 "phase_metrics": phases,
                 "trajectory_path": str(trajectory_path),
                 "trajectory_plot": str(trajectory_plot),
@@ -379,7 +404,18 @@ def main() -> None:
             "checkpoint": str(args.checkpoint),
             "split": args.split,
             "episodes": len(rows),
-            "protocol": "online Habitat; current RGB -> causal Wan VAE T1 reference, pad three zero future planes to T4; predict H8; execute first action; replan every environment step",
+            "protocol": (
+                f"online Habitat; checkpoint-derived rolling RGB window T={window_frames}; "
+                f"training reference delay={reference_delay}; Wan causal VAE -> T4; "
+                f"encode effective reference frames={encoded_frames}; "
+                "predict H8; execute first action; replan every environment step"
+            ),
+            "training_reference_delay_steps": reference_delay,
+            "bootstrap_semantics": (
+                "before 13 observations exist, left-pad the rolling window with the episode's first RGB; "
+                "phase metrics exclude these bootstrap steps"
+                if reference_delay else "none"
+            ),
             "success_rate": average(rows, "success"),
             "spl": average(rows, "spl"),
             "oracle_success": average(rows, "oracle_success"),
@@ -395,7 +431,7 @@ def main() -> None:
                 "hits": total_cache_hits,
                 "uncached": uncached_inferences,
                 "hit_ratio": float(total_cache_hits) / max(total_steps, 1),
-                "semantics": "exact reuse for identical RGB within one episode; valid because GigaNav has no recurrent state",
+                "semantics": "exact reuse for identical effective reference RGB within one episode; valid because GigaNav has no recurrent state",
             },
             "mean_latency_per_environment_step": {
                 key: value / max(total_steps, 1) for key, value in latency_totals.items()

@@ -70,7 +70,7 @@ def main() -> None:
 
     device = torch.device(args.device)
     dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
-    model, _ = load_model(args.checkpoint, device)
+    model, checkpoint_payload = load_model(args.checkpoint, device)
     vae = WanVAEModelWrapper(vae_pth=str(args.vae), dtype=dtype, device=str(device)).to(device)
     vae.eval().requires_grad_(False)
 
@@ -83,13 +83,24 @@ def main() -> None:
     args.socket.unlink(missing_ok=True)
     listener = Listener(str(args.socket), family="AF_UNIX")
     connection = listener.accept()
+    data_config = checkpoint_payload.get("data_config", {})
+    reference_delay = (
+        0 if data_config.get("action_label_alignment") == "reference_frame" else 12
+    )
+    expected_window_frames = reference_delay + 1 if reference_delay else 1
     connection.send(
         {
             "status": "ready",
             "checkpoint": str(args.checkpoint),
             "structure": model.structural_report(),
-            "online_vae_input_frames": 1,
-            "latent_padding": "causal T1 observation + three zero latent planes -> T4 model interface",
+            "training_reference_delay_steps": reference_delay,
+            "online_vae_input_frames": expected_window_frames,
+            "online_vae_encoded_frames": 1,
+            "latent_padding": (
+                "encode the rolling window's oldest frame as the causal reference and pad three zero planes"
+                if expected_window_frames == 13
+                else "causal T1 observation + three zero latent planes -> T4 model interface"
+            ),
         }
     )
     try:
@@ -114,8 +125,19 @@ def main() -> None:
                 raise RuntimeError("infer called before reset")
 
             start = time.perf_counter()
-            rgb = request["rgb"]
-            cache_key = hashlib.blake2b(memoryview(rgb), digest_size=16).digest()
+            rgb_window = np.asarray(request["rgb_window"], dtype=np.uint8)
+            if rgb_window.ndim != 4 or rgb_window.shape[-1] != 3:
+                raise ValueError(f"expected rgb_window [T,H,W,3], got {rgb_window.shape}")
+            if rgb_window.shape[0] != expected_window_frames:
+                raise ValueError(
+                    f"checkpoint expects {expected_window_frames} online frames, got {rgb_window.shape[0]}"
+                )
+            # forward_policy always discards the other three latent planes and
+            # replaces them by zeros.  Therefore only the oldest/reference RGB
+            # can affect the output; hashing and encoding anything else would
+            # change latency, not model semantics.
+            reference_rgb = rgb_window[0]
+            cache_key = hashlib.blake2b(reference_rgb.tobytes(), digest_size=16).digest()
             cached = inference_cache.get(cache_key)
             if cached is not None:
                 connection.send(
@@ -129,26 +151,32 @@ def main() -> None:
                     }
                 )
                 continue
-            frame = preprocess_rgb(rgb, args.height, args.width)
+            frame = preprocess_rgb(reference_rgb, args.height, args.width)
             preprocess_seconds = time.perf_counter() - start
 
-            # Wan's causal VAE encodes a sequence in [1, 4, 4, ...] frame
-            # groups.  Consequently the first latent plane of a T4/13-frame
-            # cache is exactly the single-frame causal encode.  GigaNav's
-            # policy path reads only that first clean reference plane and
-            # explicitly zeros the other three future planes, so online
-            # evaluation must not wastefully re-encode 13 overlapping frames.
+            # Existing GigaNav checkpoints were trained with labels starting
+            # 12 steps after a T4 window's first frame.  A 13-frame rolling
+            # observation window ending at the current environment state makes
+            # that old first causal plane exactly t-12 and its first action
+            # output exactly the action to execute at t.
             video = frame[:, None].float().div_(127.5).sub_(1.0)
             synchronize(device)
             vae_start = time.perf_counter()
             with torch.inference_mode():
-                reference_latent = vae.encode(video[None].to(device=device, dtype=dtype))
-                if reference_latent.shape[2] != 1:
-                    raise RuntimeError(f"single-frame Wan VAE returned {tuple(reference_latent.shape)}")
-                obs_latent = torch.cat(
-                    [reference_latent, reference_latent.new_zeros(reference_latent.shape[0], reference_latent.shape[1], 3, reference_latent.shape[3], reference_latent.shape[4])],
-                    dim=2,
-                )
+                obs_latent = vae.encode(video[None].to(device=device, dtype=dtype))
+                if obs_latent.shape[2] == 1:
+                    obs_latent = torch.cat(
+                        [
+                            obs_latent,
+                            obs_latent.new_zeros(
+                                obs_latent.shape[0], obs_latent.shape[1], 3,
+                                obs_latent.shape[3], obs_latent.shape[4],
+                            ),
+                        ],
+                        dim=2,
+                    )
+                if obs_latent.shape[2] != 4:
+                    raise RuntimeError(f"online Wan VAE returned {tuple(obs_latent.shape)}")
             synchronize(device)
             vae_seconds = time.perf_counter() - vae_start
 
@@ -174,6 +202,9 @@ def main() -> None:
                 "policy_seconds": policy_seconds,
                 "total_seconds": time.perf_counter() - start,
                 "latent_shape": list(obs_latent.shape),
+                "training_reference_delay_steps": reference_delay,
+                "online_vae_input_frames": expected_window_frames,
+                "online_vae_encoded_frames": 1,
                 "cache_hit": False,
             }
             inference_cache[cache_key] = response
