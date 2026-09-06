@@ -46,6 +46,12 @@ def main() -> None:
     model = GigaNavModel(model_cfg)
     init_audit = model.load_wan_checkpoint()
     model.to(device=device, dtype=dtype).train()
+    # ``GigaNavModel.forward_policy`` intentionally evaluates the small
+    # categorical head in fp32.  Restore that invariant before constructing
+    # or loading AdamW, otherwise resume casts the saved head moments to bf16
+    # and the first forward changes only the parameters back to fp32.  The
+    # foreach optimizer then rejects the mixed param/moment dtype pair.
+    model.policy_head.float()
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-2)
     start_step = 0
     if args.resume is not None:
