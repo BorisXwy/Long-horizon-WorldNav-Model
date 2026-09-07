@@ -1,0 +1,32 @@
+experiment:
+  name: giga_nav_wan21_h8_policy_only_legacy
+  mode: policy_only
+  alignment: legacy_policy_h8
+model:
+  backbone_checkpoint: /sharedata/Wan2.1-T2V-1.3B/diffusion_pytorch_model.safetensors
+  action_horizon: 8
+  giga_causal_attention: false
+data:
+  batch_size: 1
+  action_horizon: 8
+  history_micro_choices: 1,2,3,4,5,6,7
+  max_episodes: 0
+  seed: 20260902
+objective:
+  acwm_probability: 0.0
+  video_weight: 1.0
+  policy_weight: 1.0
+optimizer:
+  name: adamw
+  lr: 6.0e-5
+  weight_decay: 1.0e-2
+train:
+  device: cuda:1
+  steps: 6000
+  gradient_accumulation_steps: 32
+  effective_batch_size: 32
+  grad_clip: .inf
+  save_interval: 1000
+  log_interval: 50
+  seed: 20260902
+  output: log/giga_nav_wan21_h8_policy_only_legacy_yaml

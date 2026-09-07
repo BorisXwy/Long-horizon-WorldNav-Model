@@ -94,3 +94,74 @@ class GigaNavR2RBatchBuilder:
 
     def summary(self) -> dict[str, Any]:
         return {"adapter": "GigaNavR2RBatchBuilder", "base": self.base.summary(), "config": self.cfg.to_dict(), "action_names": ACTION_NAMES}
+
+
+class GigaNavAlignedWorldActionBatchBuilder(GigaNavR2RBatchBuilder):
+    """Build causally aligned H=8 current/future/action samples.
+
+    A cached T4 micro chunk represents 13 RGB frames.  We use latent plane 0
+    as the current reference and planes 1:3 as the eight-transition visual
+    target, so the action target starts at the same micro-chunk anchor instead
+    of after the entire 12-transition chunk.
+    """
+
+    def next_batch(self, *, device: torch.device, dtype: torch.dtype) -> tuple[dict[str, torch.Tensor], dict[str, Any]]:
+        history_micro = self.base._choose_k()
+        items = [self.base._choose_window(history_micro) for _ in range(self.cfg.batch_size)]
+        references: list[torch.Tensor] = []
+        futures: list[torch.Tensor] = []
+        targets: list[torch.Tensor] = []
+        masks: list[torch.Tensor] = []
+        ys: list[torch.Tensor] = []
+        y_masks: list[torch.Tensor] = []
+        sample_ids: list[str] = []
+        label_starts: list[int] = []
+        text_sources: list[str] = []
+        for item in items:
+            payload = self.base._payload(item.latent_path)
+            chunks = payload["micro_latents"][0].float()
+            obs = chunks[item.obs_micro]
+            if tuple(obs.shape) != (16, 4, 56, 112):
+                raise RuntimeError(f"bad T4 latent shape in {item.latent_path}: {tuple(obs.shape)}")
+            references.append(obs[:, :1])
+            futures.append(obs[:, 1:3])
+            actions = self.base._actions_for(payload)
+            label_start = int(item.obs_micro) * 12
+            combos = self.base._action_window(actions, label_start)
+            targets.append(self._combo_to_class(combos))
+            masks.append(torch.ones(self.cfg.action_horizon, dtype=torch.float32))
+            y, y_mask, source = self.base._text(item.dataset, item.sample_id)
+            ys.append(y)
+            y_masks.append(y_mask)
+            sample_ids.append(item.sample_id)
+            label_starts.append(label_start)
+            text_sources.append(source)
+        action_target = torch.stack(targets).to(device=device, non_blocking=True)
+        batch = {
+            "reference_latent": torch.stack(references).to(device=device, dtype=dtype, non_blocking=True),
+            "future_latent": torch.stack(futures).to(device=device, dtype=dtype, non_blocking=True),
+            "text_embedding": torch.cat(ys).to(device=device, dtype=dtype, non_blocking=True),
+            "text_mask": torch.cat(y_masks).to(device=device, non_blocking=True),
+            "action_target": action_target,
+            "action_loss_mask": torch.stack(masks).to(device=device, dtype=torch.float32, non_blocking=True),
+            "state": torch.zeros(self.cfg.batch_size, 1, 14, device=device, dtype=dtype),
+        }
+        meta = {
+            "history_micro": history_micro,
+            "sample_ids": sample_ids,
+            "label_start_actions": label_starts,
+            "text_sources": text_sources,
+            "temporal_alignment": "Tref=1 + Tfuture=2 = 9 RGB frames / 8 transitions; action H=8",
+        }
+        return batch, meta
+
+    def summary(self) -> dict[str, Any]:
+        payload = super().summary()
+        payload.update(
+            {
+                "adapter": "GigaNavAlignedWorldActionBatchBuilder",
+                "temporal_alignment": "T4 cache sliced to latent[0:1] reference + latent[1:3] future",
+                "action_alignment": "label_start = obs_micro * 12; H=8",
+            }
+        )
+        return payload

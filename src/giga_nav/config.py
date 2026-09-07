@@ -37,6 +37,9 @@ class GigaNavConfig:
     state_tokens: int = 1
     use_zero_future_visual: bool = True
     train_backbone: bool = True
+    giga_causal_attention: bool = False
+    cotrain_future_latent_frames: int = 2
+    visual_flow_shift: float = 2.0
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)

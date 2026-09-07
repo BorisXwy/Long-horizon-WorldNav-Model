@@ -837,6 +837,23 @@ NAV/result/vbench/threeway_stats10/
 
 ## 资源验证清单
 
+### GigaNav H=8 video-policy cotrain（2026-09-07）
+
+| 项目 | 路径/值 |
+| --- | --- |
+| Wan 初始化权重 | `/sharedata/Wan2.1-T2V-1.3B/diffusion_pytorch_model.safetensors` |
+| R2R T4 latent | `NAV/data/train/r2r_ce/t4_micro_latents_stoppad_20260822_1605/` |
+| R2R instruction cache | `NAV/data/train/r2r_ce/text_embeddings_stoppad_20260822_1605/` |
+| Cotrain YAML | `NAV/config/giga_nav/giga_nav_wan21_h8_cotrain.yaml` |
+| 训练输出 | `NAV/log/giga_nav_wan21_h8_cotrain_from_wan_20260907/` |
+| 训练 tmux | `giga_nav_h8_cotrain` |
+| TensorBoard | tmux `giga_nav_h8_cotrain_tb`，端口 `6045` |
+| 当前 GPU | GPU0；不改动同卡另一用户约 8 GiB 进程 |
+
+三种独立模式统一通过 `scripts/run_giga_nav_multitask.sh <yaml>` 启动；模型结构、
+H=8 时间对齐和 AC-WM/WAM loss 定义以 `doc/01_model/giga_nav_ablation_wan21_13b.md`
+为准。
+
 资源用于实验前应记录：
 
 - [ ] 准确的权重（Checkpoint）或数据集版本；

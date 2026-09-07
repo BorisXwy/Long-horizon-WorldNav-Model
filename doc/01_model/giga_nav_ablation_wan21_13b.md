@@ -4,8 +4,8 @@
 | --- | --- |
 | 文档 ID | `NAV-MDL-002` |
 | 类型 | Ablation 模型与训练接口 |
-| 状态 | Active / 已有 checkpoint 的滚动窗口闭环评测完成 |
-| 更新时间 | 2026-09-05 |
+| 状态 | Active / policy-video 三模式 cotrain 已实现并进入完整训练验证 |
+| 更新时间 | 2026-09-07 |
 | 职责 | 记录 GigaWorld-Policy 风格导航 ablation 的结构、输入输出、权重和运行入口 |
 
 ## 当前结论与入口
@@ -271,6 +271,107 @@ clean reference latent，补三个全零 future latent plane 以保持 `[B,16,4,
 直接反差。现在确认原因之一是评测删掉了训练定义的 +12-step 时间关系，因此这组
 SR=0 结果只保留为错误推理协议诊断，不能作为已有 checkpoint 的最终闭环结果。
 【已验证→`result/giga_nav/step5000_r2r_train_closed_loop20_20260905/summary.json`】
+
+## 2026-09-07：GigaPolicy-0.5 风格 video cotrain 扩展
+
+### 三种可分离训练模式
+
+同一个完整 `GigaNavModel` 现在支持通过 YAML 与统一脚本选择三种目标，不复制
+backbone，也不建立旁路小模型：
+
+| 模式 | Action slots 输入 | Video head | Policy head | Loss |
+| --- | --- | --- | --- | --- |
+| `video_only` / AC-WM | GT 离散动作 one-hot 写入 14-D action input | 开启 | 计算但不监督 | `L_video` |
+| `policy_only` | 全零 action query，保持既有 H=8 policy 定义 | 关闭 | 开启 | `L_CE` |
+| `cotrain` / mixed AC-WM+WAM | AC-WM batch 用 GT；WAM batch 用全零 query | 开启 | WAM batch 开启 | AC-WM: `L_video`；WAM: `L_video + 5 L_CE` |
+
+`cotrain` 默认以 `0.5` 概率抽 AC-WM micro-batch、`0.5` 概率抽 WAM
+micro-batch。GigaPolicy-0.5 公开实现提供了 AC-WM/WAM mixed training 机制但没有公开
+最终 sampling ratio，因此 `0.5` 是本项目明确记录的实验选择，不冒充论文常数。
+
+与 GigaPolicy-0.5 原生连续机器人 action flow 的差异也固定如下：原模型对 14-D
+连续 action 加噪并做 flow matching；本 ablation 为保持已有 GigaNav policy-only
+可比性，继续使用 H=8 四类离散 CE。因而 WAM action slots 使用零 query，action
+timestep 为 0；视觉流仍严格采用 GWP-0.5 的 `visual_flow_shift=2.0`：
+
+```text
+sigma = 2r / (1 + r)
+Z_noisy = sigma * epsilon + (1 - sigma) * Z_future
+V_target = epsilon - Z_future
+t_visual = round(1000 * sigma)
+```
+
+### H=8 与 video chunk 的严格时间对齐
+
+不能直接用整个 T4 chunk 的后三个 latent planes 作 future：一个 causal Wan T4
+cache 对应 13 个 RGB frames，即 12 个 transition；而 GigaNav action horizon 是 8，
+这样会留下 4 个没有 action condition 的 transition。也不把 H 改为 12，因为这会
+破坏与已有 H=8 policy 实验的直接对比。
+
+当前采用同一 T4 cache 的可复用切片：
+
+```text
+原缓存 RGB:       O(t), O(t+1), ..., O(t+12)
+原缓存 latent:    Z[0], Z[1], Z[2], Z[3]
+current/reference Z_ref    = Z[0]       # 1 RGB frame
+future target     Z_future = Z[1:3]     # 8 RGB transitions
+action target     A        = A[t:t+8]  # H=8
+```
+
+因此 video 输出为 `[B,16,2,56,112]`，覆盖当前帧之后的 8 帧；已有 T4 latent
+无需重新 VAE 编码。旧 policy-only 复现仍可选 `legacy_policy_h8`，保留原来
+`label_start=t+12` 的 delayed-label loader；新 video/cotrain 使用
+`causal_h8_video`。二者不会被静默混合。
+
+### Shared Wan block 内的因果关系
+
+新 video/cotrain 路径安装无参数的 block-causal attention，仅替换已有 Wan
+self-attention 的 K/V 可见关系，不改变参数名或官方 checkpoint 兼容性：
+
+```text
+主序列（Main sequence）:
+  [ clean reference visual | zero state + action slots | noisy future visual ]
+
+Q(reference) -> KV(reference)
+Q(state/action) -> KV(reference, state/action)
+Q(future) -> KV(reference, state/action, future)
+
+Condition:
+  UMT5 instruction [B,1,512,4096] -> 每个 Wan block 的 text cross-attention
+```
+
+这保证 policy/action hidden 看不到 GT future，不发生先验泄漏；video future 可以读到
+action，因此 AC-WM 的 GT action 确实能够控制未来视觉。旧 policy-only 路径默认关闭
+该补丁，保持已有 checkpoint 的计算图不变。
+
+### 配置、脚本与初始化
+
+```text
+src/giga_nav/causal_attention.py             # 无参数 causal mask
+src/giga_nav/model.py                        # shared video/policy forward + 两类 loss
+src/giga_nav/data.py                         # legacy 与 causal-H8 两种 loader
+scripts/train_giga_nav_multitask.py           # 统一 YAML 训练入口
+scripts/run_giga_nav_multitask.sh             # 固定虚拟环境入口
+config/giga_nav/giga_nav_wan21_h8_*.yaml      # 三种模式
+```
+
+正式 cotrain 从 `/sharedata/Wan2.1-T2V-1.3B/diffusion_pytorch_model.safetensors`
+重新加载 825 个 shape-compatible tensors，不继承已有 GigaNav policy checkpoint。
+物理 BS=1、gradient accumulation=32、EBS=32、`lr=6e-5`、每 1000 optimizer
+steps 保存。当前 GPU0 有其他用户约 8 GiB 常驻任务，为不干扰对方且仍立即启动完整
+1.3B 训练，cotrain 使用 PyTorch Adafactor 的 factored optimizer states；
+policy-only legacy YAML 仍使用原 AdamW。该优化器差异不改变模型、token、数据或 loss。
+
+完整模型/真实 batch 预检结果：官方 Wan 825 keys 加载成功；AC-WM 与 WAM 的
+`video_velocity=[1,16,2,56,112]`，policy 输出 `action_logits=[1,8,4]`；联合反向
+`L_video=0.21624`、`L_CE=2.15527`，Wan patch stem 与 policy head 均得到非零梯度，
+峰值 allocated memory 23.53 GiB。该数值只证明完整数据流与梯度链路正确，不作为质量指标。
+
+正式 run 已启动在 tmux `giga_nav_h8_cotrain`，输出为
+`log/giga_nav_wan21_h8_cotrain_from_wan_20260907/`，TensorBoard tmux 为
+`giga_nav_h8_cotrain_tb`、端口 `6045`。前两个 optimizer steps 分别为 23.34s 与
+24.04s；step 1 的 AC-WM/WAM micro-batch 数为 17/15，step 2 为 18/14，证明 mixed
+sampler、两个 loss 和 optimizer update 都已经实际运行，而非仅完成静态配置。
 
 ## 闭环前期/中期方向跟随评测
 

@@ -7,7 +7,13 @@ on the server and the project's discrete R2R action ontology.
 """
 
 from .config import GigaNavConfig
-from .data import GigaNavR2RBatchBuilder, GigaNavDataConfig
+from .data import GigaNavAlignedWorldActionBatchBuilder, GigaNavR2RBatchBuilder, GigaNavDataConfig
 from .model import GigaNavModel
 
-__all__ = ["GigaNavConfig", "GigaNavDataConfig", "GigaNavModel", "GigaNavR2RBatchBuilder"]
+__all__ = [
+    "GigaNavAlignedWorldActionBatchBuilder",
+    "GigaNavConfig",
+    "GigaNavDataConfig",
+    "GigaNavModel",
+    "GigaNavR2RBatchBuilder",
+]
