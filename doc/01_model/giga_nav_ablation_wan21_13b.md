@@ -358,20 +358,20 @@ config/giga_nav/giga_nav_wan21_h8_*.yaml      # 三种模式
 正式 cotrain 从 `/sharedata/Wan2.1-T2V-1.3B/diffusion_pytorch_model.safetensors`
 重新加载 825 个 shape-compatible tensors，不继承已有 GigaNav policy checkpoint。
 物理 BS=1、gradient accumulation=32、EBS=32、`lr=6e-5`、每 1000 optimizer
-steps 保存。当前 GPU0 有其他用户约 8 GiB 常驻任务，为不干扰对方且仍立即启动完整
-1.3B 训练，cotrain 使用 PyTorch Adafactor 的 factored optimizer states；
-policy-only legacy YAML 仍使用原 AdamW。该优化器差异不改变模型、token、数据或 loss。
+steps 保存。最初为避让 GPU0 的并行任务曾用 Adafactor 启动 39 steps 链路检查；
+该 run 没有正式 checkpoint，已经停止且不进入实验比较。GPU1 释放后，正式 cotrain
+改回与既有 GigaNav 一致的 AdamW，从原始 Wan 权重重新开始；模型、token、数据和
+loss 均未改变。
 
 完整模型/真实 batch 预检结果：官方 Wan 825 keys 加载成功；AC-WM 与 WAM 的
 `video_velocity=[1,16,2,56,112]`，policy 输出 `action_logits=[1,8,4]`；联合反向
 `L_video=0.21624`、`L_CE=2.15527`，Wan patch stem 与 policy head 均得到非零梯度，
 峰值 allocated memory 23.53 GiB。该数值只证明完整数据流与梯度链路正确，不作为质量指标。
 
-正式 run 已启动在 tmux `giga_nav_h8_cotrain`，输出为
-`log/giga_nav_wan21_h8_cotrain_from_wan_20260907/`，TensorBoard tmux 为
-`giga_nav_h8_cotrain_tb`、端口 `6045`。前两个 optimizer steps 分别为 23.34s 与
-24.04s；step 1 的 AC-WM/WAM micro-batch 数为 17/15，step 2 为 18/14，证明 mixed
-sampler、两个 loss 和 optimizer update 都已经实际运行，而非仅完成静态配置。
+正式 AdamW run 使用 GPU1，tmux 为 `giga_nav_h8_cotrain_gpu1`，输出为
+`log/giga_nav_wan21_h8_cotrain_adamw_gpu1_from_wan_20260907/`，TensorBoard tmux
+为 `giga_nav_h8_cotrain_gpu1_tb`、端口 `6045`。此前 GPU0/Adafactor 的前 39 steps
+只作为完整 mixed sampler 与梯度链路检查保留，不作为正式训练曲线。
 
 ## 闭环前期/中期方向跟随评测
 

@@ -23,12 +23,12 @@ objective:
   policy_weight: 5.0
 
 optimizer:
-  name: adafactor
+  name: adamw
   lr: 6.0e-5
   weight_decay: 1.0e-2
 
 train:
-  device: cuda:0
+  device: cuda:1
   steps: 5000
   gradient_accumulation_steps: 32
   effective_batch_size: 32
@@ -36,4 +36,4 @@ train:
   save_interval: 1000
   log_interval: 10
   seed: 20260907
-  output: log/giga_nav_wan21_h8_cotrain_from_wan_20260907
+  output: log/giga_nav_wan21_h8_cotrain_adamw_gpu1_from_wan_20260907
