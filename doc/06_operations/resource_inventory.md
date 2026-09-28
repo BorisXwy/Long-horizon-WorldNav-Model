@@ -5,7 +5,7 @@
 | 文档 ID | `NAV-OPS-001` |
 | 类型 | 资源总账（Resource Inventory） |
 | 状态 | Live / Source of Truth |
-| 更新时间 | 2026-08-29（新增流式 3D / navigation 官方复现资源） |
+| 更新时间 | 2026-09-28（新增当前数据与运行快照） |
 | 职责 | 维护数据、权重、环境、仓库、日志和结果的唯一标准路径 |
 
 本文档记录 NAV 新实验可直接使用的数据集、预训练权重和本地参考仓库。
@@ -13,6 +13,30 @@
 自 2026-08-22 起，训练 latent / tensor cache 的真实落盘根目录为
 `NAV/data/train/<dataset>/<latent_run>/`；公共 `/sharedata` 只保留原始数据、
 assets、轻量 manifest 和必要临时 render 中间态。
+
+## 当前资源快照（2026-09-28）
+
+### 数据与缓存
+
+| 类别 | 当前标准路径 | 已核验规模/状态 |
+| --- | --- | --- |
+| V1 视频 manifest | `/sharedata/NAV/derived/v1/manifests/stage1_t4_micro_episodes.jsonl` | 24,261 episodes；SpatialVID 23,837、RE10K 269、DL3DV 141、Argoverse2 14 |
+| V1 SpatialVID-20 候选 manifest | `/sharedata/NAV/derived/v1/manifests/stage1_t4_micro_episodes_spatial20.jsonl` | 5,180 episodes / 247,801 T4 micro chunks |
+| V1 T4 latent（SpatialVID-20） | `/sharedata/NAV/derived/v1/t4_micro_latents_spatial20/` | 10,360 files，185.33 GiB；当前可确认的视频 latent 主缓存 |
+| R2R train T4 latent | `NAV/data/train/r2r_ce/t4_micro_latents_stoppad_20260822_1605/` | 10,819 rows / 87,345 chunks / 65.35 GiB |
+| R2R instruction embedding | `NAV/data/train/r2r_ce/text_embeddings_stoppad_20260822_1605/` | 10,819 UMT5 embeddings，169.19 GiB |
+| RxR partial T4 latent | `NAV/data/train/rxr_ce/t4_micro_latents_stoppad_20260822_1423/` | 532 unique episodes / 6,508 chunks / 4.87 GiB；暂停但可续写 |
+| 原始数据 | `/sharedata/datasets/{RealEstate10K,DL3DV-10K,SpatialVID,Argoverse2-Sensor-100GB,R2R,RxR}` | 原始视频/assets 与 metadata；不被 latent 写入污染 |
+
+视频 action 的来源是 pose/trajectory（RE10K、DL3DV、SpatialVID、Argoverse2），VLN action 的来源是 simulator expert path（R2R、RxR）。统一流水线为 source manifest → action sidecar → `T_latent=4`（13 RGB frames、stride 12）→ Wan causal VAE `.pt` → 可选 UMT5 embedding；Register/history 在训练时在线构造。`full_episodes_v1` manifest 已存在，但本次没有确认相应的 full latent 目录，因此只能把 SpatialVID-20 cache 标为已核验完成。
+
+### 当前后台任务与运行状态
+
+- NAV 模型训练当前没有活跃进程；GigaNav cotrain 的完成 run 为 `log/giga_nav_wan21_h8_cotrain_adamw_gpu1_from_wan_20260907/`，保存至 step 5000。
+- TensorBoard 历史转发：GigaNav policy-only 为 `6044`，GigaNav cotrain 为 `6045`。
+- RE10K、Sekai 下载窗口正在等待 `/sharedata/private/youtube_cookies.txt`；Ego4D 正在等待 AWS credentials。等待窗口不应计入当前下载速度或“已完成数据”。
+
+本节之后的旧资源表保留用于路径追溯；其中标记为“当前运行”的 2026-08-29 及更早状态均是历史，不能覆盖本节的 2026-09-28 快照。
 
 当前 V1 技术设计入口是 `NAV/doc/01_model/model_evolution_and_current_architecture.md`。
 V0 InfiniteWorld/Register A/B 旧方案保留在

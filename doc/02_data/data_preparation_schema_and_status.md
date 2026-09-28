@@ -5,8 +5,80 @@
 | 文档 ID | `NAV-DAT-010` |
 | 类型 | 数据准备、Schema 与状态总览 |
 | 状态 | Live / Source of Truth |
-| 更新时间 | 2026-08-23 |
+| 更新时间 | 2026-09-28 |
 | 职责 | 集中维护数据集调研、下载/预处理状态、T4 latent/window 构建、pose/action 标注、VLN 渲染和资源配比。 |
+
+## 当前快照（2026-09-28）
+
+本节是当前数据状态的优先依据；本文后续按 2026-08-23 及更早日期标记的段落保留为历史记录。若历史段落中的路径、规模或“正在运行”描述与本节冲突，以本节和实际 manifest/目录为准。当前没有 NAV 模型训练进程，数据侧也没有正在运行的 VAE encode worker；仍存在的下载窗口是等待凭据/站点 cookie 的守护进程，不应计为下载进度。
+
+### 1. 数据血缘与用途
+
+| 数据集/资源 | 原始来源与落盘位置 | 标注或条件 | 当前用途与状态 |
+| --- | --- | --- | --- |
+| RE10K | 官方 RealEstate10K，`/sharedata/datasets/RealEstate10K/` | 原始帧、相机 pose/metadata；由时间对齐生成 dense action sidecar | V1 视频生成主数据之一；manifest 269 episodes，已进入 T4 候选集 |
+| DL3DV-10K | 官方 DL3DV-10K，`/sharedata/datasets/DL3DV-10K/` | `images_8/frame_*.png` 与 `transforms.json`；按图像帧对齐 pose，旋转 Slerp、平移插值后生成 action | V1 视频生成主数据之一；manifest 141 episodes，已进入 T4 候选集 |
+| SpatialVID | 官方 SpatialVID，`/sharedata/datasets/SpatialVID/` | MP4、`poses.npy`、`indexes.txt`；稀疏 pose 插值为逐帧 action | V1 视频生成补充数据；全量 23,837 episodes，当前正式候选只取 deterministic 20%（4,756 episodes） |
+| Argoverse2 Sensor | 官方 Argoverse2 sensor，`/sharedata/datasets/Argoverse2-Sensor-100GB/` | `ring_front_center` 图像与 ego trajectory/extrinsics；按 timestamp 最近邻匹配生成 action | 自驾场景补充；14 episodes 已进入 manifest，尚非主要训练配比 |
+| R2R | 官方 R2R 指令、Matterport3D/Habitat-Sim simulator assets，`/sharedata/datasets/R2R/` | expert path/action 与 instruction；通过 simulator 渲染 RGB，terminal STOP 后复制终端 observation | Stage3 policy/action 数据；R2R train 全量已渲染、编码并保留 text embedding |
+| RxR | 官方 RxR 指令与路线，`/sharedata/datasets/RxR/` | multilingual instruction、路线和 simulator action；同 R2R 流式渲染/编码规则 | 仅完成 budget 子集，stream render/encode 已暂停，已有 latent 保留可续写 |
+| Kinetics-400 | 历史视频研究资源；当前 `/sharedata/datasets` 快照未发现可确认的可用根目录 | 曾计划用 VGGT 做相机变化/置信度分析 | 不进入当前训练主线，不能把旧文档中的历史规模当作当前落盘事实 |
+| Sekai / Ego4D | `/sharedata/datasets/Sekai/`、`/sharedata/datasets/Ego4D/` | Sekai 有 metadata/pose；Ego4D 需要 AWS 凭据 | 当前没有可用视频训练产物；Sekai 等待 cookie，Ego4D 等待 AWS credentials |
+| VBench | benchmark 配置/资源 | 用于视频质量评测 | 仅评测资源，不作为训练集 |
+
+### 2. 当前落盘规模与可复用产物
+
+公共目录中的 manifest 当前覆盖 `24,261 episodes`：SpatialVID 23,837、RE10K 269、DL3DV 141、Argoverse2 14；完整 episode manifest 的统计为 `155,051 micro chunks / 12,559,131 frames`。V1 的 T4 候选 manifest 为 `5,180 episodes / 247,801 micro chunks`，其中 SpatialVID 4,756，其余数据集全部保留。该候选集对应的已落盘 T4 latent 为：
+
+```text
+/sharedata/NAV/derived/v1/t4_micro_latents_spatial20/
+  10,360 files (.pt + metadata)
+  185.33 GiB
+```
+
+VLN 数据实际写入个人项目目录，避免挤占公共原始数据空间：
+
+```text
+R2R T4 latent:
+  NAV/data/train/r2r_ce/t4_micro_latents_stoppad_20260822_1605/
+  10,819 encoded rows / 87,345 micro chunks / 65.35 GiB
+
+R2R instruction embedding:
+  NAV/data/train/r2r_ce/text_embeddings_stoppad_20260822_1605/
+  10,819 UMT5 embeddings / 169.19 GiB
+
+RxR partial T4 latent:
+  NAV/data/train/rxr_ce/t4_micro_latents_stoppad_20260822_1423/
+  532 unique episodes / 6,508 chunks / 4.87 GiB
+
+Legacy pose-aligned cache (非当前主缓存):
+  /sharedata/NAV/derived/latents_pose_aligned/
+  7.90 GiB
+```
+
+R2R 的原始渲染 metadata 和 manifest 保留在
+`/sharedata/NAV/derived/v1/vln/rendered_obs/stage3_vln_render_r2r_train_stoppad_gpu0_20260822_1605/`；PNG 中间帧在流式 VAE 编码并校验后清理。RxR 的已生成部分保留在个人目录，后续可从已有 manifest 续写。旧文档提到的 `/sharedata/NAV/derived/latents/full_episodes_v1` 在本次检查中未找到，因此不能宣称“全量视频 episode 已全部 latent 化”。
+
+### 3. 统一构建规则
+
+```text
+原始视频/模拟器资产
+  -> source manifest（episode、帧路径、时间戳、数据集 ID）
+  -> pose/action sidecar（视频集由 pose 推导；VLN 直接使用 expert action）
+  -> 按 V1 规则切成 T_latent=4 micro chunk
+  -> Wan causal VAE 编码并保存 .pt（每 chunk 13 RGB frames、stride=12，latent [16,4,56,112]）
+  -> 可选 UMT5 text embedding（无 instruction 的视频数据使用空文本 embedding）
+  -> 训练时在线抽取 history window；Register 更新不预先缓存
+```
+
+视频数据集的 action 只作为 video generation 的 `a_condition`；VLN 数据集的 action 作为 policy 的 `a_label`，二者都统一映射为平移/旋转离散组合。R2R/RxR 的 terminal STOP 是吸收态：STOP 之后复制终端 observation 以完成存储 padding，但 sampler 必须只保留一个 terminal window，不能把 padding 扩成大量额外 STOP 样本。T4 episode latent 是可复用的基础资产，同一 episode 可在训练时抽取不同 history 长度（IW1/4/8/16 或更长），无需重复 VAE 编码。
+
+### 4. 当前阻塞与解释
+
+- RE10K、Sekai、Ego4D 的后台窗口当前分别等待 YouTube cookie 或 AWS credentials；它们是可恢复的等待状态，不是活跃下载速度。
+- 全量视频 manifest 已构建，但当前只确认 SpatialVID 20% 候选集完成 T4 latent；不能把 full manifest 等同于 full latent。
+- R2R train 是目前最完整、最可复现实验数据：RGB 由 simulator 渲染，STOP 规则已固定，T4 latent 与 UMT5 embedding 均已落盘。
+- 训练和评测脚本应优先读取本节列出的 manifest 与个人目录 cache；旧 V0 81-frame、T=1、旧 sharedata latent 仅用于历史对照。
 
 ## 当前入口结论
 

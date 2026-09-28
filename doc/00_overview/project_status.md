@@ -5,10 +5,74 @@
 | 文档 ID | `NAV-OVR-003` |
 | 类型 | 项目状态（Project Status） |
 | 状态 | Live / Executive Summary |
-| 更新时间 | 2026-08-14（Asia/Shanghai） |
+| 更新时间 | 2026-09-28（Asia/Shanghai） |
 | 职责 | 汇总模型、数据、训练、评测、运行任务、风险和下一里程碑 |
 
-## 一句话状态
+## 当前快照（2026-09-28）
+
+当前主线已经从“持续启动旧版 Stage2 训练”转为 **V1 数据/模型规范冻结后的可复现实验与 GigaNav 消融**。下方按 2026-08-14 记录的 Stage1/Stage2 运行状态均为历史，不代表当前仍在训练。
+
+### 当前实现与训练
+
+- V1 完整模型、Stage1/2/3 数据接口、Register、shared WanBlock、video/policy 分支和 probe 代码已在 `src/` 中模块化；训练配置通过 YAML 选择 video-only、policy-only 或 cotrain。
+- GigaNav 是独立导航消融，不替代 V1 Register/3D 主线：使用官方 Wan2.1-T2V-1.3B 初始化，H=8 离散 policy，支持 policy-only 与 AC-WM/WAM cotrain。
+- 最新 GigaNav cotrain 已完成 5,000 optimizer steps，日志与 checkpoint 位于 `log/giga_nav_wan21_h8_cotrain_adamw_gpu1_from_wan_20260907/`；policy-only 历史 run 位于 `log/giga_nav_wan21_h8_ebs32_20260903_003600/` 及其续训目录。当前没有 NAV 模型训练进程，TensorBoard 历史转发仍可从 `6044/6045` 查看。
+- 最新 cotrain 使用完整 1.3B Wan backbone、AdamW、物理 batch 1、梯度累积 32、EBS=32；最后记录的 video flow loss 约 0.20，policy CE 需按 WAM 有效样本归一化解读，尚不能作为最终导航质量结论。
+
+### 当前数据与流水线
+
+- 视频侧当前可核验的主 manifest 是 `24,261 episodes / 155,051 micro chunks`；正式候选集是 SpatialVID deterministic 20% 加上全部 RE10K、DL3DV、Argoverse2，共 `5,180 episodes / 247,801 chunks`，已编码 T4 latent 约 `185.33 GiB`。
+- VLN 侧 R2R train 已完成 simulator 渲染、STOP 吸收态 padding、T4 latent 编码和 UMT5 instruction embedding：`10,819 episodes / 87,345 chunks / 65.35 GiB latent`；RxR 只保留已完成的部分 budget latent。
+- 统一规则是“原始数据不改写 → manifest → pose/action sidecar → T_latent=4 chunk → VAE latent → 可选 text embedding → 训练时在线构造 history/Register window”。Register 不预存，history 长度在 sampler 中复用同一 episode latent 抽取。
+- RE10K/DL3DV/SpatialVID/Argoverse2 的 action 来自相机 pose；R2R/RxR 的 action 来自 simulator expert path。视频数据 action 进入 `a_condition`，VLN action 进入 `a_label`，统一离散为平移/旋转组合；完整血缘和目录见 `doc/02_data/data_preparation_schema_and_status.md`。
+
+### 当前风险与下一步
+
+1. 不把 full manifest 当成 full latent：当前已确认的是 SpatialVID 20% cache 和完整 R2R train cache。
+2. RE10K、Sekai、Ego4D 后台窗口正在等待 cookie/AWS credentials，恢复后仍需重新核对下载量和 latent 完成度。
+3. 下一步应在固定的数据 cache 上继续做完整 V1/GigaNav 对照、生成质量和开环 policy 评测，再决定是否恢复大规模数据准备。
+
+## 历史快照（2026-08-14）
+
+**2026-08-14 Stage Two pose-only 正式验证训练已启动**：当前正在运行一轮
+RE10K-only Stage Two 训练。除数据集限制为 RE10K 外，模型结构、latent 几何和
+loss 形式均按 V1 最终标准执行：
+
+```text
+tmux:
+  nav_stage2_re10k_poseonly_formal
+
+run:
+  NAV/log/v1_stage2_re10k_pose_video/v1_stage2_re10k_poseonly_formal_wanfull_re10k_20260814_092440/
+
+doc:
+  NAV/doc/03_training/training_plan_and_experiment_log.md
+```
+
+启动前已通过 full-shape preflight：`[16,4,56,112]` T4 latent、30-layer
+Wan-size visual stream、128 Register tokens、pose-only `L_visual + λ_pose L_pose`。
+GPU preflight 在 batch=1、grad_accum=1 下通过，峰值约 39.73 GiB；正式训练
+使用 micro_batch=1、grad_accum=16、effective_batch=16，step1 用时 75.43s，
+峰值约 39.93 GiB。
+
+**2026-08-14 Stage Two diagnostic 已降级**：此前用 RE10K T4 micro latent 与
+`Wan2.1-T2V-1.3B` compatible initialization 跑过一次“视频生成 +
+current-hidden pose supervision”diagnostic，但该 run 缩小了 latent spatial
+resolution 且缩小了 backbone depth，违反当前“不得小型化验收”的项目规则。
+它不作为 Stage Two 完整训练、正式 smoke、验收结果或方案有效性证据。记录仅作
+调试追溯：
+
+```text
+run:
+  NAV/log/v1_stage2_re10k_pose_video/v1_stage2_re10k_pose_video_1000step_20260814_022646/
+
+doc:
+  NAV/doc/03_training/training_plan_and_experiment_log.md
+```
+
+该 run 的数值不得再用于证明 pose supervision、视频生成质量或 Stage Two 方案
+有效。后续 Stage Two pose-only 训练必须使用完整模型结构、完整 latent/video
+几何和真实 RE10K pose target；只允许缩小数据量、步数和 batch/grad-accum。
 
 **2026-08-14 代码状态更新**：V1 正式完整模型链路已经落到
 `NAV/src/nav/v1/models/full_model.py`，并通过 full-pipeline smoke：
@@ -21,17 +85,25 @@ NAV/log/full_pipeline_smoke/v1_full_pipeline_smoke_20260814_014744/report.json
 Stage Three policy/action loss + video/3D rehearsal loss、参数梯度/更新审计，
 以及 videogen / policy 两种推理路径。旧 scaffold、旧 `A_query`、旧 action-bias
 和旧 InfiniteWorld adapter 可执行入口已从当前代码主线删除；历史结论只保留在
-v0 文档中。
+V0 历史章节中。
 
-**2026-08-14 设计覆盖说明**：V1 正式结构已按 DEC-034 更新为
-`A_noise -> action flow decoder -> A_out`、`H_action=H_nav=10`、
-dual-stream / MoT-style backbone，以及明确 causal attention 关系。此前
-`A_query` / single hidden-width / direct CE logits 相关训练与测速只能视为历史
-smoke 或 diagnostic，不再代表最终正式结构。随后 DEC-037 将 Register 侧统一为
+**2026-08-14 设计覆盖说明**：V1 正式结构保留
+`A_noise -> action flow decoder -> A_out`、`H_action=H_nav=10` 和明确 causal
+attention 关系，但 DEC-041 已覆盖 DEC-034 中的 dual-stream / MoT-style backbone：
+主结构必须是 **single shared WanBlock token stream**。此前
+`A_query`、direct CE logits，以及当前代码中复制 action expert 的 dual-stream
+路径都只能视为历史 smoke/diagnostic 或待清理实现，不再代表最终正式结构。
+随后 DEC-037 将 Register 侧统一为
 `RegisterCell`：每个 episode 从 fixed `R_null` 开始，
 `R_i=RegisterCell(R_{i-1}, concat([visual_tokens(C_i), A_hist_i]))`；`A_hist`
 通过独立 action tokens / cross-attention context 交互，禁止 action bias /
 latent bias / additive bias。
+
+**2026-08-14 代码状态更新**：`src/nav/v1/models/full_model.py` 已从
+`V1DualStreamBackbone` 切到 `V1SharedWanBackbone`。当前静态参数统计：
+total ≈ `1.217B`，backbone ≈ `1.109B`，不再是 dual-stream 版本的 ≈`2.89B`。
+语法检查通过，但正式 Stage One/Two/Three 训练和 full-pipeline smoke 仍需基于
+shared WanBlock 版本重新启动，不能沿用 DEC-041 前的 smoke/run 作为验收。
 
 V1 Stage One 已进入 text-conditioned fullmix 正式训练流水线：从官方
 `Wan2.1-T2V-1.3B` `diffusion_pytorch_model.safetensors` 初始化 shared DiT
@@ -48,8 +120,8 @@ Register 在训练集上单步保真正常（gthist 记录 8：A@500/B@1000 L1=0
 等价于 teacher-forced（B 在 3-chunk autoreg DD 塌缩）、Register 优于 HPMC
 （3-chunk 下 HPMC 不触发二次压缩、与全量历史等价，比不出差别）、text 通道
 可用（Stage One 空 text）、train-test action 一致。核心待补：长程训练 +
-长程 autoreg 对比（R13）。详见 `../04_training/v0_stage_one_dl3dv_experiments.md` 验证
-边界段与 `../08_insight/insight_log.md` R13–R16。
+长程 autoreg 对比（R13）。详见 `../03_training/training_plan_and_experiment_log.md` 验证
+边界段与 `../05_insight/insight_log.md` R13–R16。
 
 三阶段边界已确定：Stage One 是 video generation memory pretraining；
 Stage Two 在同一视频生成前向中增加 3D supervision/probe；
@@ -139,6 +211,7 @@ run 作为历史保留，不用于正式续训。
 | tmux | GPU | 任务 | 当前快照 |
 | --- | ---: | --- | --- |
 | `nav_v1_stageone_text_full5000` | 1 | V1 Stage One text-conditioned fullmix 5000 steps | 已完成 SpatialVID text cache 并进入训练；step 1 loss=1.3859，peak_reserved=32.78 GiB；run `v1-stageone-text-fullmix-wan21official-lp-mb1-ebs16-5000-20260812-020056` |
+| `nav_stage2_re10k_poseonly_formal` | 0 | V1 Stage Two RE10K-only pose supervision formal verification | 正在跑 1000 optimizer steps；full T4 latent `[16,4,56,112]`、Wan-size 30 layers、Register 128、effective batch 16；run `v1_stage2_re10k_poseonly_formal_wanfull_re10k_20260814_092440` |
 | `nav_v1_stageone_text_full5000_tensorboard` | CPU | TensorBoard for text-conditioned fullmix run | 监听 `0.0.0.0:6013` |
 | `nav_v1_stage3_vln_render_r2r` | 0 | R2R-CE standard train/val_seen/val_unseen RGB 渲染 | 目标 13,436 episodes / 72 scenes；输出 `/sharedata/NAV/derived/v1/vln/rendered_obs/stage3_vln_render_r2r_standard_gpu0_20260812_100122/` |
 | `nav_v1_stageone_final_train` | 1 | V1 Stage One 1000-step 历史 run | 已完成；run `v1-stageone-final-wan21official-actioniface-window-longhist-mb1-ebs16-1000-20260811-023650` |
@@ -146,7 +219,7 @@ run 作为历史保留，不用于正式续训。
 | `nav_v1_t4_latent_spatial20_gpu0_0`–`_5` | 0 | SpatialVID 20% T4 micro latent 6-shard 数据准备 | 继续后台运行，原始下载目录不改动 |
 | 已完成 | 0/1 | T4 micro latent: DL3DV / RE10K | 已进入当前训练窗口池 |
 
-实时数字以后以 `../03_data/dataset_preparation_status.md` 为准。
+实时数字以后以 `../02_data/data_preparation_schema_and_status.md` 为准。
 
 ## 自动后续链
 
@@ -192,7 +265,7 @@ effective、effective batch 16）。
    SpatialVID 20%，并使用 dataset-aware sampler。
 
 该顺序对应当前 V1 主线；下方部分旧门槛保留为 V0/历史参考，后续需要按
-`project_invariants.md` 进一步重写。
+`project_rules_and_documentation_standard.md` 进一步重写。
 
 SpatialVID Short 正式训练前：
 
@@ -230,25 +303,25 @@ SpatialVID Short 正式训练前：
 
 当前 V1 主线：
 
-- 模型接口：`../01_design/v1_action_centered_io_interface.md`
-- 待定项与默认选择：`../01_design/v1_open_design_questions.md`
-- 三阶段数据、变量、loss：`../04_training/v1_three_stage_training_data_plan.md`
-- Stage One T4/IW 对齐训练：`../04_training/v1_stage_one_t4_iw_aligned.md`
-- 数据 tensor 与窗口：`../03_data/training_data_construction.md`
-- Action / geometry schema：`../03_data/v1_action_geometry_schema.md`
+- 模型接口：`../01_model/model_evolution_and_current_architecture.md`
+- 待定项与默认选择：`../01_model/model_evolution_and_current_architecture.md`
+- 三阶段数据、变量、loss：`../03_training/training_plan_and_experiment_log.md`
+- Stage One T4/IW 对齐训练：`../03_training/training_plan_and_experiment_log.md`
+- 数据 tensor 与窗口：`../02_data/data_preparation_schema_and_status.md`
+- Action / geometry schema：`../02_data/data_preparation_schema_and_status.md`
 
 运行与资源：
 
-- 实时数据状态：`../03_data/dataset_preparation_status.md`
-- VLN 四套闭环数据整备：`../03_data/vln_dataset_preparation_status.md`
+- 实时数据状态：`../02_data/data_preparation_schema_and_status.md`
+- VLN 四套闭环数据整备：`../02_data/data_preparation_schema_and_status.md`
 - 资源路径：`../06_operations/resource_inventory.md`
 - 决策记录：`decision_log.md`
 
 历史与 baseline：
 
-- V0 Register 在线训练语义：`../04_training/v0_streaming_training_sample_semantics.md`
-- V0 Stage Two 网络：`../01_design/v0_stage_two_3d_supervision.md`
-- V0 Stage Two 训练：`../04_training/v0_stage_two_3d_supervision_training.md`
-- V0 Stage Three 导航：`../01_design/v0_stage_three_navigation.md`
-- V0 多数据集课程：`../04_training/v0_multidataset_curriculum.md`
-- R2R-CE ≥StreamVLN SOTA 复现：`../05_evaluation/r2r_ce_sota_reproduction.md`
+- V0 Register 在线训练语义：`../03_training/training_plan_and_experiment_log.md`
+- V0 Stage Two 网络：`../01_model/model_evolution_and_current_architecture.md`
+- V0 Stage Two 训练：`../03_training/training_plan_and_experiment_log.md`
+- V0 Stage Three 导航：`../01_model/model_evolution_and_current_architecture.md`
+- V0 多数据集课程：`../03_training/training_plan_and_experiment_log.md`
+- R2R-CE ≥StreamVLN SOTA 复现：`../04_evaluation/evaluation_reproduction_and_benchmarks.md`
