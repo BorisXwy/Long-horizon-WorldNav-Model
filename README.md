@@ -69,6 +69,8 @@ doc/_templates/    新文档和新实验记录模板
 | NAV-OVR-003 | Live / Executive Summary | 项目状态 | `doc/00_overview/project_status.md` |
 | NAV-OVR-010 | Active / Consolidated | 规则与文档规范 | `doc/00_overview/project_rules_and_documentation_standard.md` |
 | NAV-OVR-020 | Live / Binding Standard | 最终正式结构与训练标准 | `doc/00_overview/final_formal_training_standard.md` |
+| NAV-OVR-021 | Live / Research Roadmap | 研究总览、核心 Idea 与执行计划 | `doc/00_overview/research_idea_and_execution_plan.md` |
+| NAV-OVR-022 | Live / Research Concept | 研究调研、核心问题与科研 Idea 设计 | `doc/00_overview/research_idea_design.md` |
 | NAV-MDL-001 | Live / Source of Truth | 模型结构与接口总览 | `doc/01_model/model_evolution_and_current_architecture.md` |
 | NAV-MDL-002 | Active / Full-chain Ablation | GigaNav + Wan2.1-1.3B 导航消融 | `doc/01_model/giga_nav_ablation_wan21_13b.md` |
 | NAV-DAT-010 | Live / Source of Truth | 数据准备、Schema 与状态总览 | `doc/02_data/data_preparation_schema_and_status.md` |
