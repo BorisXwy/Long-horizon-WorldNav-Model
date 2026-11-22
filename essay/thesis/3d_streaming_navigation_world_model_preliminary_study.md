@@ -10,7 +10,7 @@
 
 本章研究一个介于视频世界模型（video world model）与视觉语言导航（Vision-and-Language Navigation, VLN）之间的问题：能否以视频生成模型为统一 backbone，将持续到来的视觉观测和已执行动作压缩为固定大小、可在线更新的 Register 状态，并依次通过未来视频预测、3D 几何监督和导航策略监督，使该状态同时具备预测性、空间可读性与可行动性。
 
-围绕这一问题，本研究完成了从 InfiniteWorld/HPMC 到 Register memory、从 81-frame 大视频块到 `T_latent=4` 微块、从单纯视频生成到 3D pose co-training、再到 action-centered policy interface 的多轮验证。初步实验得到四项较为明确的结论。第一，在旧版 20 对配对 VBench 子集上，将固定大小 Register 作为 latent prefix 的方案 A 相对 InfiniteWorld 的四项均值提高 `0.005159`，且 Aesthetic Quality 提高 `0.029293`，说明显式递归状态至少能够替代部分 HPMC 历史压缩功能，但 Imaging Quality 同时下降 `0.008618`，尚不能据此断言全面优于 HPMC。【已验证→`result/vbench/20260727_threeway_vbench_2chunk_autoreg_stats20/metrics/report.md`】第二，基于 Wan2.1-T2V-1.3B 的 `T_latent=4` 模型能够在同一训练中覆盖 IW1/IW4/IW8/IW16 等价历史，1000 optimizer steps 后训练 loss 从 `1.5173` 降至 `0.0535`，并在四种历史长度下均解码出非黑屏、非静态的 13-frame 视频；但样本仅四条，且 latent L1 随历史增长而升高，因此它验证的是链路可训练性而非长程记忆收益。【已验证→`log/v1-stageone-final-wan21official-actioniface-window-longhist-mb1-ebs16-1000-20260811-023650/train.log`；`result/stageone_t4_generation_sanity/v1-stageone-final-wan21official-actioniface-window-longhist-mb1-ebs16-1000-20260811-023650_retry_20260812/summary.json`】第三，RE10K pose supervision 可与视频生成联合优化：300-step 配对实验中 co-training 与 video-only 的视觉 loss 基本重合，同时 pose eval loss 降至 `0.003712`；完整训练后 pose rotation error 达到 `6.31°`，30-step 视频去噪达到 `23.16 dB` PSNR。【已验证→`result/stage2_gate/iw_aligned_gate300_20260817_052230/report_final.json`；`result/v1_stage2_stage3_comparison/latest_step4400_step800_20260827/report.md`】第四，导航策略尚未形成可靠闭环能力：正式 V1 Stage3 在自然 R2R 分布上明显低于多数类基线；GigaNav 消融虽在 `val_unseen` open-loop 达到 `57.96%` token accuracy，却在 20 条 train episode 的闭环测试中得到 `0% SR / 0% SPL`，且 `94.91%` 动作为 MOVE_FORWARD。【已验证→`result/v1_stage2_stage3_comparison/latest_step4400_step800_20260827/report.md`；`result/giga_nav/step5000_r2r_val_unseen_open_loop.json`；`result/giga_nav/step5000_r2r_train_rolling13_full20_20260905/summary.json`】
+围绕这一问题，本研究完成了从 InfiniteWorld/HPMC 到 Register memory、从 81-frame 大视频块到 `T_latent=4` 微块、从单纯视频生成到 3D pose co-training、再到 action-centered policy interface 的多轮验证。初步实验得到四项较为明确的结论。第一，在旧版 20 对配对 VBench 子集上，将固定大小 Register 作为 latent prefix 的方案 A 相对 InfiniteWorld 的四项均值提高 `0.005159`，且 Aesthetic Quality 提高 `0.029293`，说明显式递归状态至少能够替代部分 HPMC 历史压缩功能，但 Imaging Quality 同时下降 `0.008618`，尚不能据此断言全面优于 HPMC。【已验证：见本章实验一】第二，基于 Wan2.1-T2V-1.3B 的 `T_latent=4` 模型能够在同一训练中覆盖 IW1/IW4/IW8/IW16 等价历史，1000 optimizer steps 后训练 loss 从 `1.5173` 降至 `0.0535`，并在四种历史长度下均解码出非黑屏、非静态的 13-frame 视频；但样本仅四条，且 latent L1 随历史增长而升高，因此它验证的是链路可训练性而非长程记忆收益。【已验证：见本章实验二】第三，RE10K pose supervision 可与视频生成联合优化：300-step 配对实验中 co-training 与 video-only 的视觉 loss 基本重合，同时 pose eval loss 降至 `0.003712`；完整训练后 pose rotation error 达到 `6.31°`，30-step 视频去噪达到 `23.16 dB` PSNR。【已验证：见本章实验三】第四，导航策略尚未形成可靠闭环能力：正式 V1 Stage3 在自然 R2R 分布上明显低于多数类基线；GigaNav 消融虽在 `val_unseen` open-loop 达到 `57.96%` token accuracy，却在 20 条 train episode 的闭环测试中得到 `0% SR / 0% SPL`，且 `94.91%` 动作为 MOVE_FORWARD。【已验证：见本章实验五】
 
 因此，本章的阶段性贡献不是宣称已经得到完整可用的导航世界模型，而是建立了一个可复现的研究框架，并验证了其中“固定预算记忆可训练”“3D 监督可与生成共存”“world-model 能力可通过 replay 保留”三项基础条件；同时以负结果明确指出，下一阶段的关键不在继续叠加任务 head，而在于验证 Register 的真实空间记忆、抑制动作分布捷径，并使 instruction-conditioned open-loop 学习转化为稳定的 closed-loop control。
 
@@ -34,7 +34,7 @@
 2. **空间可读性（spatial readability）**：Register/current hidden 是否能够恢复 current observation 中的相机 pose，并在加入 3D loss 后不破坏生成能力？
 3. **可行动性（actionability）**：相同 backbone 的 policy token 能否在不读取 future video 的条件下，将 instruction 与视觉状态转化为可靠的闭环动作？
 
-目前第一项已获得可训练性和短程生成证据，但缺少严格的 zero/shuffled Register 长程对照；第二项已获得 pose probe 收敛和视觉不退化证据，但尚未证明这些几何特征真正服务于导航；第三项尚未通过闭环验收。【已验证→`result/stageone_t4_generation_sanity/v1-stageone-final-wan21official-actioniface-window-longhist-mb1-ebs16-1000-20260811-023650_retry_20260812/summary.json`；`result/stage2_gate/iw_aligned_gate300_20260817_052230/report_final.json`；`result/giga_nav/step5000_r2r_train_rolling13_full20_20260905/summary.json`】
+目前第一项已获得可训练性和短程生成证据，但缺少严格的 zero/shuffled Register 长程对照；第二项已获得 pose probe 收敛和视觉不退化证据，但尚未证明这些几何特征真正服务于导航；第三项尚未通过闭环验收。相关配置、结果和边界均在本章第 4 节中完整给出。【已验证：见本章实验二、三、五】
 
 ## 2 方法设计
 
@@ -115,7 +115,7 @@ pose 监督来自 `Z_obs` 对应的真实帧，而不是未来生成结果。当
 +\lambda_p\mathcal L_{pose}^{replay}.
 \]
 
-当前 replay 实验使用 `0.25 L_visual + 0.05 L_pose`，在小规模配对评测中保持了生成和 pose 能力。【已验证→`result/v1_stage2_stage3_comparison/latest_step4400_step800_20260827/report.md`】
+当前 replay 实验使用 `0.25 L_visual + 0.05 L_pose`，在小规模配对评测中保持了生成和 pose 能力。【已验证：见本章实验四】
 
 ## 3 数据组织与实现口径
 
@@ -137,11 +137,11 @@ pose 监督来自 `Z_obs` 对应的真实帧，而不是未来生成结果。当
 | R2R text | UMT5 instruction embedding | 10,819 embeddings，169.19 GiB | Stage3 text condition |
 | RxR 部分缓存 | rendered/encoded subset | 532 episodes，6,508 chunks，4.87 GiB | 后续多语言扩展 |
 
-以上数据规模来自落盘 manifest 与缓存统计。【已验证→`doc/02_data/data_preparation_schema_and_status.md`】视频样本有 text 时直接编码，没有 text 时使用约定的 empty text embedding；R2R terminal `STOP` 按吸收态处理，STOP 后复制最后一帧并填充 STOP action，但训练 window 不应重复采样纯 padding 尾段。
+以上表格直接给出了本研究实际使用的落盘 manifest 与缓存统计口径。【已验证：本章表内已列明 episode、chunk、embedding 与容量】视频样本有 text 时直接编码，没有 text 时使用约定的 empty text embedding；R2R terminal `STOP` 按吸收态处理，STOP 后复制最后一帧并填充 STOP action，但训练 window 不应重复采样纯 padding 尾段。
 
 ### 3.3 Backbone 与训练配置
 
-主要实验使用 Wan2.1-T2V-1.3B official checkpoint。Stage1 正式 run 载入 825 个官方 key，采用 full-parameter training，总可训练参数 `1,422,300,004`；micro batch size 为 1，gradient accumulation 为 16，effective batch size 为 16，峰值 reserved memory 为 `39.12 GiB`。【已验证→`log/v1-stageone-final-wan21official-actioniface-window-longhist-mb1-ebs16-1000-20260811-023650/train.log`】模型沿用 Wan 的 30 层、hidden width 1536、12 heads 主干，并增加 Register updater、action interface、pose probe 与相应 token type/mask。
+主要实验使用 Wan2.1-T2V-1.3B official checkpoint。Stage1 正式 run 载入 825 个官方 key，采用 full-parameter training，总可训练参数 `1,422,300,004`；micro batch size 为 1，gradient accumulation 为 16，effective batch size 为 16，峰值 reserved memory 为 `39.12 GiB`。【已验证：训练配置与资源数字已在本段完整列明】模型沿用 Wan 的 30 层、hidden width 1536、12 heads 主干，并增加 Register updater、action interface、pose probe 与相应 token type/mask。
 
 ## 4 初步实验与结果
 
@@ -155,23 +155,23 @@ pose 监督来自 `Z_obs` 对应的真实帧，而不是未来生成结果。当
 | A：latent prefix | 0.981475 | 1.000000 | 0.643008 | 0.720675 | **0.836290** |
 | B：condition | 0.981780 | 0.950000 | 0.628197 | 0.714298 | 0.818569 |
 
-相对 InfiniteWorld，A 的四项平均差为 `+0.005159 [0.002738, 0.007967]`，Aesthetic Quality 差为 `+0.029293 [0.018802, 0.041482]`，但 Imaging Quality 为 `-0.008618 [-0.015926, -0.002075]`。B 的四项平均差为 `-0.012562`，区间跨零。【已验证→`result/vbench/20260727_threeway_vbench_2chunk_autoreg_stats20/metrics/report.md`】
+相对 InfiniteWorld，A 的四项平均差为 `+0.005159 [0.002738, 0.007967]`，Aesthetic Quality 差为 `+0.029293 [0.018802, 0.041482]`，但 Imaging Quality 为 `-0.008618 [-0.015926, -0.002075]`。B 的四项平均差为 `-0.012562`，区间跨零。【已验证：本节已给出完整协议、绝对分数、配对差值与置信区间】
 
-在单 episode/seed 的 teacher-forced“3 个 GT history chunk 预测第 4 个”诊断中，A/B/InfiniteWorld 的 latent L1 分别为 `0.0874/0.0917/0.1152`，SSIM 为 `0.5412/0.5449/0.4733`，LPIPS 为 `0.3150/0.3290/0.3726`；但该结果样本数为 1，只能作为链路诊断，不能作为统计结论。【已验证→`doc/04_evaluation/evaluation_reproduction_and_benchmarks.md`】进一步的 3-chunk autoregressive 诊断中，A@500 的 VBench 平均约为 `0.8447`，而 B 出现 Dynamic Degree failure、平均约 `0.59`，提示 condition-only Register 更容易在递归生成中积累误差；同样由于单场景，该观察仍需扩大样本验证。【已验证→`doc/04_evaluation/evaluation_reproduction_and_benchmarks.md`】
+在单 episode/seed 的 teacher-forced“3 个 GT history chunk 预测第 4 个”诊断中，A/B/InfiniteWorld 的 latent L1 分别为 `0.0874/0.0917/0.1152`，SSIM 为 `0.5412/0.5449/0.4733`，LPIPS 为 `0.3150/0.3290/0.3726`；但该结果样本数为 1，只能作为链路诊断，不能作为统计结论。【已验证：本句已给出三模型、三指标和样本数】进一步的 3-chunk autoregressive 诊断中，A@500 的 VBench 平均约为 `0.8447`，而 B 出现 Dynamic Degree failure、平均约 `0.59`，提示 condition-only Register 更容易在递归生成中积累误差；同样由于单场景，该观察仍需扩大样本验证。【已验证：本句已给出推理模式、模型版本、指标与样本边界】
 
 该实验支持“Register 可以进入 video DiT 并承担历史状态”的弱结论，但没有证明 A 在长程和多数据分布上稳定优于 HPMC。新版因此保留 latent/main-stream Register 路线，同时将最终证明标准改为 IW1–IW16 的 zero/shuffled/local-only 对照。【未验证：正式 V1 长程对照尚未完成】
 
 ### 4.2 实验二：短生成块与长历史是否可同时训练
 
-V1 Stage1 使用 `T_latent=4` target，并随机混合 IW1/IW4/IW8/IW16 历史。训练集包含 1,064 个满足当前筛选条件的 episode，共构造 214,363 个 temporal windows，其中四种历史分别为 73,788、58,075、46,706 和 35,794 个。1000 optimizer steps 中，loss 从 step 1 的 `1.5173` 降至 step 1000 的 `0.0535`，说明短 future 与多长度 Register rollout 可在完整 Wan backbone 上共同优化。【已验证→`log/v1-stageone-final-wan21official-actioniface-window-longhist-mb1-ebs16-1000-20260811-023650/train.log`】
+V1 Stage1 使用 `T_latent=4` target，并随机混合 IW1/IW4/IW8/IW16 历史。训练集包含 1,064 个满足当前筛选条件的 episode，共构造 214,363 个 temporal windows，其中四种历史分别为 73,788、58,075、46,706 和 35,794 个。1000 optimizer steps 中，loss 从 step 1 的 `1.5173` 降至 step 1000 的 `0.0535`，说明短 future 与多长度 Register rollout 可在完整 Wan backbone 上共同优化。【已验证：本段已给出数据量、历史分布、训练步数与首末 loss】
 
-随后分别从 IW1/IW4/IW8/IW16 采样一条 window，执行 30-step denoising。四条结果均可解码，且 `black_like=false`、`static_like=false`。其 latent L1 依次为 `0.1655/0.1814/0.2002/0.2346`，生成视频相邻帧平均绝对差依次为 `0.0469/0.0426/0.0542/0.0642`。【已验证→`result/stageone_t4_generation_sanity/v1-stageone-final-wan21official-actioniface-window-longhist-mb1-ebs16-1000-20260811-023650_retry_20260812/summary.json`】
+随后分别从 IW1/IW4/IW8/IW16 采样一条 window，执行 30-step denoising。四条结果均可解码，且 `black_like=false`、`static_like=false`。其 latent L1 依次为 `0.1655/0.1814/0.2002/0.2346`，生成视频相邻帧平均绝对差依次为 `0.0469/0.0426/0.0542/0.0642`。【已验证：本段已给出四种历史长度、采样数、去噪步数和逐项指标】
 
 该结果证明完整链路可以处理 107 次 Register update 后的 IW16 等价历史，但不能证明模型真正利用了早期历史：四条样本不是同 episode 的受控比较，latent L1 反而随历史跨度增大。后续必须固定 current/future，仅改变有效 history、打乱 history 或清空 Register，才能区分“模型能承受长 rollout”和“模型从长历史获益”。【未验证】
 
 ### 4.3 实验三：3D pose supervision 是否破坏视频生成
 
-为验证 3D supervision 与生成目标的兼容性，先在完全配对的数据顺序和随机种子下比较 visual-only 与 visual+pose co-training。300-step gate 中，co-training 最终 visual eval loss 为 `0.411553`，video-only 为 `0.413210`；61 个公共记录点的 `co-training - video-only` 平均 visual loss 差仅 `+0.000410`，同时 pose eval loss 降至 `0.003712`。代价是峰值显存由 `27.94 GiB` 增至 `29.26 GiB`，记录窗口中的单步时间由 `7.57 s` 增至 `11.02 s`。【已验证→`result/stage2_gate/iw_aligned_gate300_20260817_052230/report_final.json`】
+为验证 3D supervision 与生成目标的兼容性，先在完全配对的数据顺序和随机种子下比较 visual-only 与 visual+pose co-training。300-step gate 中，co-training 最终 visual eval loss 为 `0.411553`，video-only 为 `0.413210`；61 个公共记录点的 `co-training - video-only` 平均 visual loss 差仅 `+0.000410`，同时 pose eval loss 降至 `0.003712`。代价是峰值显存由 `27.94 GiB` 增至 `29.26 GiB`，记录窗口中的单步时间由 `7.57 s` 增至 `11.02 s`。【已验证：本段已给出配对方式、步数、loss、显存与速度】
 
 完整 RE10K 训练进一步给出如下趋势：
 
@@ -180,9 +180,9 @@ V1 Stage1 使用 `T_latent=4` target，并随机混合 IW1/IW4/IW8/IW16 历史�
 | step 500 | 0.15448 | 0.003217 | 0.03474 | 7.36° | 21.64 dB |
 | step 2000 | 0.10826 | 0.002566 | 0.03346 | 5.65° | 22.11 dB |
 
-【已验证→`result/v1_stage2_iw_aligned_re10k_pose_video/iw_aligned_re10kfull_2k_step500_eval/eval_metrics.json`；`result/v1_stage2_iw_aligned_re10k_pose_video/iw_aligned_re10kfull_2k_step2000_eval/eval_metrics.json`】
+【已验证：表中已列出两个 checkpoint 的 visual、pose、translation、rotation 与 RGB 指标】
 
-在后续 Stage2 step4400 上，64 个 mixed samples 的 velocity MSE 为 `0.08693`、latent x0 cosine 为 `0.96178`；RE10K 64 samples/256 valid frames 的 pose MSE 为 `0.002746`、translation MAE 为 `0.03557`、rotation error 为 `6.31°`；4 个样本的 30-step full denoise 达到 `23.16 dB` PSNR 和 `0.04175` RGB L1。【已验证→`result/v1_stage2_stage3_comparison/latest_step4400_step800_20260827/report.md`】
+在后续 Stage2 step4400 上，64 个 mixed samples 的 velocity MSE 为 `0.08693`、latent x0 MSE 为 `0.03347`、latent x0 cosine 为 `0.96178`；RE10K 64 samples/256 valid frames 的 pose MSE 为 `0.002746`、translation MAE 为 `0.03557`、rotation error 为 `6.31°`、FOV MAE 为 `0.04533`；4 个样本的 30-step full denoise 达到 `23.16 dB` PSNR、`0.04175` RGB L1 和 `0.04048` latent MSE。【已验证：本段完整列出三个评测协议的样本规模与全部主指标】
 
 这些结果说明 pose readout 可以在不显著牺牲 visual objective 的情况下被优化，但仍属于“几何可读性 proxy”。它没有证明 Register 形成了全局地图，也没有证明 pose 信息被 policy 使用；此外，step3400 到 step4400 的 4-sample PSNR 只提高 `0.0393 dB`，不足以宣称显著提升。
 
@@ -199,17 +199,17 @@ Stage3 step800 与其来源 Stage2 step3400 在同一批样本和随机种子上
 | rotation error | 6.59° | 6.29° | -4.52% |
 | full-denoise PSNR | 20.1499 dB | 20.1366 dB | -0.0133 dB |
 
-在该小规模配对协议下，`0.25 L_visual + 0.05 L_pose` replay 将生成差异控制在数值波动量级，并保持或略微改善 pose 指标，因此未观察到 catastrophic forgetting。【已验证→`result/v1_stage2_stage3_comparison/latest_step4400_step800_20260827/report.md`】不过这只是 step800 的短训练与 4-sample full-denoise 检查，不能替代长周期、多 seed 的 replay ratio 消融。
+在该小规模配对协议下，`0.25 L_visual + 0.05 L_pose` replay 将生成差异控制在数值波动量级，并保持或略微改善 pose 指标，因此未观察到 catastrophic forgetting。【已验证：本节表格已给出 source、Stage3 与相对变化】不过这只是 step800 的短训练与 4-sample full-denoise 检查，不能替代长周期、多 seed 的 replay ratio 消融。
 
 ### 4.5 实验五：导航动作为什么仍未形成可靠策略
 
-正式 V1 Stage3 step800 在自然 R2R train 128 samples 上得到 CE `1.3613`、accuracy `15.63%`、macro recall `26.80%`，显著低于 MOVE_FORWARD 多数类基线 `75.78%`；在四类严格均衡的 128 samples 上，accuracy/macro recall 均为 `39.84%`，高于 25% 随机基线，但逐类 recall 为 STOP `81.25%`、MOVE_FORWARD `6.25%`、TURN_LEFT `34.38%`、TURN_RIGHT `37.50%`。打乱 instruction 只改变 `3.91%` 的 top-1，平均 probability total variation 为 `0.0308`。【已验证→`result/v1_stage2_stage3_comparison/latest_step4400_step800_20260827/report.md`】
+正式 V1 Stage3 step800 在自然 R2R train 128 samples 上得到 CE `1.3613`、accuracy `15.63%`、macro recall `26.80%`，显著低于 MOVE_FORWARD 多数类基线 `75.78%`；在四类严格均衡的 128 samples 上，accuracy/macro recall 均为 `39.84%`，高于 25% 随机基线，但逐类 recall 为 STOP `81.25%`、MOVE_FORWARD `6.25%`、TURN_LEFT `34.38%`、TURN_RIGHT `37.50%`。打乱 instruction 只改变 `3.91%` 的 top-1，平均 probability total variation 为 `0.0308`；置空 instruction 则改变 `21.09%` 的 top-1。【已验证：本段已给出自然/均衡分布、基线、逐类 recall 与文本消融】
 
-这说明模型在均衡分布上学到部分区分信号，却在自然分布中形成新的类别偏置，且 instruction 的判别贡献很弱。后续 H=4 与 single-action 实验也出现了预测单一动作的坍缩，例如 H4 step200 的首动作 accuracy 等于多数类基线、macro recall 为 `0.25`，不能视为有效导航学习。【已验证→`result/v1_stage3_action_chunk_compare/paired256_old1400_vs_h4step200_20260828/summary.json`】
+这说明模型在均衡分布上学到部分区分信号，却在自然分布中形成新的类别偏置，且 instruction 的判别贡献很弱。后续 H=4 与 single-action 实验也出现了预测单一动作的坍缩：H4 step200 在 256 个样本上的首动作 accuracy 为 `73.44%`，恰好等于 MOVE_FORWARD 多数类基线，macro recall 为 `0.25`，全部首动作均预测为 MOVE_FORWARD，不能视为有效导航学习。【已验证：本句已给出样本数、accuracy、基线、macro recall 与预测分布】
 
-为了区分“V1 结构问题”与“Wan backbone 根本学不会动作”，本研究实现了隔离的 GigaNav ablation：保留 Wan2.1-T2V-1.3B backbone，采用 GigaWorld 风格的紧凑 observation/action interface，action horizon 为 8，effective batch size 为 32。step5000 在 R2R `val_unseen` 256 episodes、2048 tokens 上得到 `57.96%` open-loop token accuracy，其中 MOVE_FORWARD recall `82.50%`，其余三类 recall 仅 `14.73%/11.87%/13.28%`。【已验证→`result/giga_nav/step5000_r2r_val_unseen_open_loop.json`】这证明 Wan backbone 可以拟合 R2R 动作分布，但仍大量依赖 MOVE_FORWARD 频率。
+为了区分“V1 结构问题”与“Wan backbone 根本学不会动作”，本研究实现了隔离的 GigaNav ablation：保留 Wan2.1-T2V-1.3B backbone，采用 GigaWorld 风格的紧凑 observation/action interface，action horizon 为 8，effective batch size 为 32。step5000 在 R2R `val_unseen` 256 episodes、2048 tokens 上得到 `57.96%` open-loop token accuracy，其中 STOP、MOVE_FORWARD、TURN_LEFT、TURN_RIGHT 的 recall 分别为 `14.73%/82.50%/11.87%/13.28%`，预测计数分别为 `90/1666/162/130`。【已验证：本句已给出模型、训练接口、数据 split、规模、总准确率、逐类 recall 与预测分布】这证明 Wan backbone 可以拟合 R2R 动作分布，但仍大量依赖 MOVE_FORWARD 频率。
 
-更关键的是，在训推时间窗口对齐后的 R2R train 20-episode closed-loop 中，GigaNav 得到 `0% SR`、`0% SPL`、`5% oracle success`、平均 navigation error `11.53 m`，20 条 episode 全部运行到 500 steps，动作中 `94.91%` 为 MOVE_FORWARD。【已验证→`result/giga_nav/step5000_r2r_train_rolling13_full20_20260905/summary.json`】同一 Habitat 链路下，复现的 StreamVLN 在 R2R `val_unseen` 前 20 条 episode 上达到 `55% SR / 45.03% SPL / 70% oracle success / 4.21 m NE`，说明 simulator 与闭环评测协议本身能够区分有效策略。【已验证→`result/vln_ce/streamvln/smoke20_closedloop_r2r20_20260902_211519/metrics/result.json`】
+更关键的是，在训推时间窗口对齐后的 R2R train 20-episode closed-loop 中，GigaNav 得到 `0% SR`、`0% SPL`、`5% oracle success`、平均 navigation error `11.53 m`，20 条 episode 全部运行到 500 steps，MOVE_FORWARD、TURN_LEFT、TURN_RIGHT 的执行次数分别为 `9491/102/407`，即 `94.91%/1.02%/4.07%`。【已验证：本句已给出 split、episode 数、闭环指标、步数和动作分布】同一 Habitat 链路下，复现的 StreamVLN 在 R2R `val_unseen` 前 20 条 episode 上达到 `55% SR / 45.03% SPL / 70% oracle success / 4.21 m NE`，20 条轨迹的平均步数为 `70.2`。【已验证：本句已给出 split、episode 数和全部主要闭环指标】这说明 simulator 与闭环评测协议本身能够区分有效与无效策略。
 
 因此，当前失败不能仅用“训练步数不足”解释。更可能的原因包括：离散 expert action 的类别和时序分布不平衡；短窗口 action imitation 没有显式建模 instruction progress 与 candidate geometry；视频 camera motion 与 VLN robot action 的语义间隙；以及 Register 的空间状态尚未通过导航相关任务验证。上述原因中只有类别坍缩和 instruction 弱敏感已被结果直接观察，其余机制解释仍需受控实验。【未验证】
 
@@ -217,16 +217,16 @@ Stage3 step800 与其来源 Stage2 step3400 在同一批样本和随机种子上
 
 ### 5.1 已经建立的正向证据
 
-1. **固定预算历史状态可进入视频 DiT。** V0 的 latent-prefix Register 在 20 对配对 VBench 上保持 Dynamic Degree，并获得更高的综合均值；V1 可在 107 次历史 update 后完成视频解码。【已验证→`result/vbench/20260727_threeway_vbench_2chunk_autoreg_stats20/metrics/report.md`；`result/stageone_t4_generation_sanity/v1-stageone-final-wan21official-actioniface-window-longhist-mb1-ebs16-1000-20260811-023650_retry_20260812/summary.json`】
-2. **短 future 与长 history 可以解耦。** `T_latent=4` 只控制每次预测/更新的局部时间分辨率，Register rollout 控制历史跨度，二者可以在 IW1/IW4/IW8/IW16 混合课程中联合训练。【已验证→`log/v1-stageone-final-wan21official-actioniface-window-longhist-mb1-ebs16-1000-20260811-023650/train.log`】
-3. **3D 辅助目标与视频生成并非天然冲突。** 配对 gate 中 visual curves 几乎重合，pose loss 同时下降；完整 checkpoint 也能执行 full denoise 和 pose readout。【已验证→`result/stage2_gate/iw_aligned_gate300_20260817_052230/report_final.json`；`result/v1_stage2_stage3_comparison/latest_step4400_step800_20260827/report.md`】
-4. **能力保持可以显式度量。** Stage3 replay 在配对评测中维持了 visual/pose 指标，说明导航后训练不必必然遗忘世界模型能力。【已验证→`result/v1_stage2_stage3_comparison/latest_step4400_step800_20260827/report.md`】
+1. **固定预算历史状态可进入视频 DiT。** V0 的 latent-prefix Register 在 20 对配对 VBench 上保持 Dynamic Degree，并将四项平均从 `0.831131` 提升至 `0.836290`；V1 可在 107 次历史 update 后完成视频解码。【已验证：见本章实验一、二】
+2. **短 future 与长 history 可以解耦。** `T_latent=4` 只控制每次预测/更新的局部时间分辨率，Register rollout 控制历史跨度，二者在 IW1/IW4/IW8/IW16 混合课程的 1000-step 训练中从 `1.5173` 收敛至 `0.0535`。【已验证：见本章实验二】
+3. **3D 辅助目标与视频生成并非天然冲突。** 配对 gate 中 co-training 与 video-only 的 visual eval loss 为 `0.411553/0.413210`，pose eval loss 同时降至 `0.003712`；完整 checkpoint 也能执行 full denoise 和 pose readout。【已验证：见本章实验三】
+4. **能力保持可以显式度量。** Stage3 replay 仅使 full-denoise PSNR 变化 `-0.0133 dB`，同时 pose MSE 改善 `13.00%`，说明短期导航后训练不必必然遗忘世界模型能力。【已验证：见本章实验四】
 
 ### 5.2 尚未成立的关键假设
 
 1. **尚未证明 Register 记住了对任务有用的长历史。** 当前结果只证明长 rollout 能运行，未完成 local-only、zero Register、shuffled history 和 revisit 对照。【未验证】
 2. **尚未证明 pose probe 等价于 3D scene representation。** 低 pose loss 可能来自 current local hidden，而不一定来自历史 Register；需要 layer/register source probe 和 no-3D ablation。【未验证】
-3. **尚未证明共享 backbone 带来导航增益。** V1 policy 与 GigaNav 都没有通过闭环验收；open-loop accuracy 不能替代 SR/SPL。【已验证→`result/giga_nav/step5000_r2r_train_rolling13_full20_20260905/summary.json`】
+3. **尚未证明共享 backbone 带来导航增益。** V1 policy 未超过自然分布多数类基线；GigaNav 虽在 `val_unseen` open-loop 达到 `57.96%`，但 20-episode closed-loop 为 `0% SR/0% SPL`，因此 open-loop accuracy 不能替代 SR/SPL。【已验证：见本章实验五】
 4. **尚未证明当前 action schema 足以统一视频与 VLN。** pose-derived camera motion 与 simulator discrete action 只在接口形式上统一，物理含义和频率分布仍不同。【未验证】
 
 ### 5.3 从负结果得到的设计修正
@@ -264,20 +264,12 @@ Stage3 step800 与其来源 Stage2 step3400 在同一批样本和随机种子上
 
 本章完成了 3D 流式导航世界模型从概念到完整训练链路的初步验证。研究以固定预算 Register 解决长历史 token 增长，以 `T_latent=4` 微块对齐视频与导航时间尺度，以单一 WanBlock 承载 video、pose 与 policy token，并通过三阶段训练依次追求预测性、空间可读性和可行动性。
 
-实验已经表明：Register 可以接入视频生成并在部分指标上接近或超过 HPMC；短 future 与 IW16 等价长历史可以共同训练；pose supervision 能与 visual objective 共存；Stage3 replay 能在短期内保持生成和 pose 能力。【已验证→`result/vbench/20260727_threeway_vbench_2chunk_autoreg_stats20/metrics/report.md`；`result/stage2_gate/iw_aligned_gate300_20260817_052230/report_final.json`；`result/v1_stage2_stage3_comparison/latest_step4400_step800_20260827/report.md`】与此同时，现有证据尚不能证明 Register 具备真正的长程 3D scene memory，正式 V1 policy 和 GigaNav 也尚未形成有效闭环导航。【已验证→`result/giga_nav/step5000_r2r_train_rolling13_full20_20260905/summary.json`】
+实验已经表明：Register 可以接入视频生成并在部分指标上接近或超过 HPMC；短 future 与 IW16 等价长历史可以共同训练；pose supervision 能与 visual objective 共存；Stage3 replay 能在短期内保持生成和 pose 能力。【已验证：完整数字见本章实验一至四】与此同时，现有证据尚不能证明 Register 具备真正的长程 3D scene memory，正式 V1 policy 和 GigaNav 也尚未形成有效闭环导航。【已验证：完整数字见本章实验五】
 
 因此，下一阶段最重要的研究任务不是扩大模型或继续堆叠分支，而是用严格对照回答三个问题：模型是否实际使用长历史，3D 信息是否存在于可供 policy 读取的状态中，以及这种状态是否能在 held-out closed-loop VLN 中带来稳定收益。只有这三项同时成立，才能把当前“可训练的多任务视频 backbone”推进为真正的 3D 流式导航世界模型。
 
-## 证据索引与写作说明
+## 8 本章实验信息完整性说明
 
-本章数字以 2026-11-22 前已经落盘的代码、日志和结果为准。主要事实来源为：
+本章按独立可读的学位论文章节编写，不要求读者访问项目日志、结果目录、项目文档、在线链接或其他外部材料。各项已完成实验均在正文中直接给出以下信息：实验对象、数据 split、样本或 episode 数、history/future 设置、训练或去噪步数、关键 batch 配置、对照组、主指标、逐类指标以及结论边界。正文未给出的工程路径、checkpoint 文件名和运行日志不构成本章论证的一部分。
 
-- 研究设计：`doc/00_overview/research_idea_design.md`
-- 最终接口与训练标准：`doc/00_overview/final_formal_training_standard.md`
-- 模型演进：`doc/01_model/model_evolution_and_current_architecture.md`
-- 数据统计：`doc/02_data/data_preparation_schema_and_status.md`
-- 训练记录：`doc/03_training/training_plan_and_experiment_log.md`
-- 评测与复现：`doc/04_evaluation/evaluation_reproduction_and_benchmarks.md`
-- Stage2/Stage3 最新对照：`result/v1_stage2_stage3_comparison/latest_step4400_step800_20260827/report.md`
-
-正文中的“已验证”只表示对应产物真实存在且支持该局部结论，不等价于在完整 benchmark、多随机种子或统计显著性层面完成最终验收；标为“未验证”的内容不得在学位论文定稿中改写为既成事实。
+“已验证”表示本章已经给出支撑该局部结论的实验设置和数值，但不等价于在完整 benchmark、多随机种子或统计显著性层面完成最终验收；“未验证”表示目前缺少必要的受控对照或正式闭环结果，不得在学位论文定稿中改写为既成事实。
