@@ -80,6 +80,7 @@ doc/_templates/    新文档和新实验记录模板
 | NAV-EVL-012 | Active / Literature-audited Snapshot | R2R-CE 前十 Action Head 与预测形式 | `doc/04_evaluation/r2r_ce_action_head_leaderboard_20260906.md` |
 | NAV-INS-001 | Active / 受规则约束 | Insight 记录 | `doc/05_insight/insight_log.md` |
 | NAV-OPS-001 | Live | 资源总账 | `doc/06_operations/resource_inventory.md` |
+| NAV-THS-001 | Draft / Evidence-backed | 学位论文章节：3D 流式导航世界模型初步验证 | `essay/thesis/3d_streaming_navigation_world_model_preliminary_study.md` |
 
 ## 旧文档合并关系
 
